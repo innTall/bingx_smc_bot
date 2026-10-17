@@ -1,0 +1,6 @@
+{
+  "symbol": "BTC/USDT:USDT",
+  "timeframe": "1h",
+  "limit": 50,
+  "timezone_offset_hours": 3
+}
