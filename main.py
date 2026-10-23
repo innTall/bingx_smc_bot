@@ -79,7 +79,9 @@ async def process_symbol(session, formatted_symbol, timeframes, limit, config):
     msg_text = format_multi_tf_report(formatted_symbol, tf_data_map)
     
     if msg_text:
-        send_telegram_message(
+        # Исправлено: добавили session, await и правильный вызов
+        await send_telegram_message(
+            session=session,
             token=config['telegram_token'],
             chat_id=config['telegram_chat_id'],
             text=msg_text
@@ -119,7 +121,7 @@ async def scheduler_loop():
             now = datetime.datetime.now()
             
             # Ждем, пока наступит 3-я минута часа (например, 14:03, 15:03 и т.д.)
-            if now.minute == 3:
+            if now.minute == 19:
                 print(f"\n[INFO] Starting scheduled analysis at {now.strftime('%Y-%m-%d %H:%M:%S')}")
                 start_time = time.time()
                 

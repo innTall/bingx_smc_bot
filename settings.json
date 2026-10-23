@@ -2,5 +2,8 @@
   "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
   "timeframes": ["1h", "4h", "1d"],
   "limit": 100,
-  "timezone_offset_hours": 3  
+  "timezone_offset_hours": 3,
+  "SNR_candles": 5,
+  "SNR_history": 50,
+  "SL_max": 5
 }
