@@ -1,13 +1,24 @@
+# main.py (или main_2.py)
 import asyncio
 import aiohttp
+import logging
 import time
 import datetime
+import pandas as pd
+from typing import Any, Dict, List, Mapping, Optional
+
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
-from fractals import analyze_fractals_v3, check_fractal_raid
-from notifier import send_telegram_message
+from fractals import analyze_fractals_v3, Fractal
+from snr import analyze_snr_data
+from notifier import format_snr_debug_message, send_telegram_message
 
-def format_multi_tf_report(symbol, tf_data_map):
+logger = logging.getLogger(__name__)
+
+
+def format_multi_tf_report(
+    symbol: str, tf_data_map: Mapping[str, Mapping[str, Any]]
+) -> Optional[str]:
     clean_symbol = symbol.split('/')[0]
     
     has_data = any(
@@ -56,30 +67,60 @@ def format_multi_tf_report(symbol, tf_data_map):
         
     return message
 
-async def process_symbol(session, formatted_symbol, timeframes, limit, config):
+async def process_symbol(
+    session: aiohttp.ClientSession,
+    formatted_symbol: str,
+    timeframes: List[str],
+    limit: int,
+    config: Mapping[str, Any],
+) -> Dict[str, Dict[str, Any]]:
     tf_data_map = {}
     
     # Создаем задачи для одновременного запроса всех таймфреймов по текущей монете
     tasks = [fetch_bingx_ohlcv_async(session, formatted_symbol, tf, limit) for tf in timeframes]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     
     for tf, df_candles in zip(timeframes, results):
-        if df_candles is not None and not df_candles.empty:
-            report_fractals = analyze_fractals_v3(df_candles, config['timezone_offset_hours'], symbol=formatted_symbol)
+        # Безопасная проверка на исключение или то, что это не DataFrame
+        if isinstance(df_candles, BaseException):
+            logger.error(
+                "Unable to fetch candles for %s (%s): %s",
+                formatted_symbol,
+                tf,
+                df_candles,
+            )
+            tf_data_map[tf] = {'fractals': [], 'snr': None}
+            continue
             
-            for f in report_fractals:
-                if f['status'] == 'Working':
-                    b_type, b_idx = check_fractal_raid(df_candles, f)
-                    f['breakout_type'] = b_type
-            
-            tf_data_map[tf] = {'fractals': report_fractals}
+        if isinstance(df_candles, pd.DataFrame) and not df_candles.empty:
+            try:
+                report_fractals: List[Fractal] = analyze_fractals_v3(
+                    df_candles,
+                    config.get('timezone_offset_hours', 0),
+                    symbol=formatted_symbol,
+                )
+                snr_report = analyze_snr_data(
+                    df_candles,
+                    config.get('timezone_offset_hours', 0),
+                    symbol=formatted_symbol,
+                    fractals=report_fractals,
+                )
+            except (KeyError, TypeError, ValueError, OverflowError):
+                logger.exception(
+                    "Unable to analyze candles for %s (%s)",
+                    formatted_symbol,
+                    tf,
+                )
+                tf_data_map[tf] = {'fractals': [], 'snr': None}
+                continue
+
+            tf_data_map[tf] = {'fractals': report_fractals, 'snr': snr_report}
         else:
-            tf_data_map[tf] = {'fractals': []}
+            tf_data_map[tf] = {'fractals': [], 'snr': None}
             
     msg_text = format_multi_tf_report(formatted_symbol, tf_data_map)
     
     if msg_text:
-        # Исправлено: добавили session, await и правильный вызов
         await send_telegram_message(
             session=session,
             token=config['telegram_token'],
@@ -89,6 +130,7 @@ async def process_symbol(session, formatted_symbol, timeframes, limit, config):
         print(f"[INFO] Consolidated Telegram message sent for {formatted_symbol}.")
     else:
         print(f"[INFO] No valid data found for {formatted_symbol}, message skipped.")
+    return tf_data_map
 
 async def main():
     config = load_settings()
@@ -101,7 +143,6 @@ async def main():
     start_time = time.time()
     
     async with aiohttp.ClientSession() as session:
-        # Запускаем обработку всех символов параллельно
         symbol_tasks = [process_symbol(session, sym, timeframes, limit, config) for sym in symbols]
         await asyncio.gather(*symbol_tasks)
         
@@ -120,21 +161,35 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            # Ждем, пока наступит 3-я минута часа (например, 14:03, 15:03 и т.д.)
-            if now.minute == 19:
+            if now.minute == 3:
                 print(f"\n[INFO] Starting scheduled analysis at {now.strftime('%Y-%m-%d %H:%M:%S')}")
                 start_time = time.time()
                 
                 symbol_tasks = [process_symbol(session, sym, timeframes, limit, config) for sym in symbols]
-                await asyncio.gather(*symbol_tasks)
+                symbol_data = await asyncio.gather(*symbol_tasks)
+                
+                for tf in timeframes:
+                    snr_reports = []
+                    for tf_data_map in symbol_data:
+                        snr_data = tf_data_map.get(tf, {}).get('snr')
+                        if snr_data is not None:
+                            snr_reports.append(snr_data)
+                    
+                    if snr_reports:
+                        debug_msg = format_snr_debug_message(snr_reports, tf)
+                        await send_telegram_message(
+                            session=session,
+                            token=config['telegram_token'],
+                            chat_id=config['telegram_chat_id'],
+                            text=debug_msg
+                        )
+                        print(f"[INFO] SNR Debug report sent for TF {tf}.")
                 
                 elapsed = time.time() - start_time
                 print(f"[INFO] Cycle finished in {elapsed:.2f} seconds. Waiting for the next hour...")
                 
-                # Спим 60 секунд, чтобы случайно не запустить цикл второй раз на той же минуте
                 await asyncio.sleep(60)
             else:
-                # Проверяем время каждые 15 секунд
                 await asyncio.sleep(15)
 
 if __name__ == "__main__":
