@@ -30,14 +30,14 @@ def analyze_snr_data(
         fractal_index = fractal.get("index")
         if fractal.get("status") != "Working" or fractal_type not in working:
             continue
-        if not isinstance(fractal_index, Integral) or not 0 <= fractal_index <= last_candle_index:
+        if not isinstance(fractal_index, Integral) or not 0 <= int(fractal_index) <= last_candle_index:
             raise ValueError(f"Invalid fractal index in analysis result: {fractal_index!r}")
         fractal_index = int(fractal_index)
 
         raid_index = fractal.get("broken_at")
         if raid_index is not None and (
             not isinstance(raid_index, Integral)
-            or not fractal_index + 2 <= raid_index <= last_candle_index
+            or not int(fractal_index) + 2 <= int(raid_index) <= last_candle_index
         ):
             raise ValueError(f"Invalid raid index in analysis result: {raid_index!r}")
         if raid_index is not None:
