@@ -6,7 +6,7 @@ import time
 import datetime
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Coroutine
 
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
@@ -46,7 +46,6 @@ async def process_symbol(
                     df_candles,
                     symbol=formatted_symbol,
                 )
-                # Убран устаревший timezone_offset_hours, чтобы избежать дублирования symbol
                 snr_report = analyze_snr_data(
                     df_candles,
                     symbol=formatted_symbol,
@@ -79,7 +78,10 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
     print(f"\n[INFO] Starting analysis cycle for symbols: {symbols} | Timeframes: {timeframes}")
     start_time = time.time()
     
-    symbol_tasks = [process_symbol(session, sym, timeframes, limit, config) for sym in symbols]
+    # Явно типизируем список корутин для корректной работы asyncio.gather под тайпчекером
+    symbol_tasks: List[Coroutine[Any, Any, Dict[str, Dict[str, Any]]]] = [
+        process_symbol(session, sym, timeframes, limit, config) for sym in symbols
+    ]
     symbol_data_list = await asyncio.gather(*symbol_tasks)
     
     # Собираем словарь формата: { "BTCUSDT": { "1h": {...}, "4h": {...} }, ... }
@@ -129,7 +131,7 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            if now.minute == 15:
+            if now.minute == 37:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 

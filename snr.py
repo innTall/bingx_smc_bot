@@ -17,7 +17,8 @@ def _get_candle_type(open_p: float, close_p: float) -> str:
     return "FLAT"
 
 
-def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: str) -> Optional[Dict[str, Any]]:
+def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: str, 
+    snr_candles: int = 5) -> Optional[Dict[str, Any]]:
     """
     Ищет KL SNR между индексом фрактала и индексом рейда, двигаясь от Raid влево (в прошлое).
     Комбинация из 2-х свечей (пара i-1 и i):
@@ -27,9 +28,14 @@ def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: 
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
 
+    # Ограничиваем левую границу поиска: либо фрактал, либо отступ на snr_candles влево от рейда,
+    # в зависимости от того, что ближе (чтобы не выйти за границы диапазона и не копать слишком глубоко).
+    max_lookback_index = raid_index - snr_candles
+    start_left_limit = max(fractal_index, max_lookback_index)
+
     # Двигаемся от raid_index влево до fractal_index + 1
     # Проверяем пару: левая (i - 1), права (i)
-    for i in range(raid_index, fractal_index, -1):
+    for i in range(raid_index, start_left_limit, -1):
         left_idx = i - 1
         right_idx = i
 
