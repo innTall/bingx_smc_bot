@@ -4,6 +4,7 @@ import aiohttp
 import logging
 import time
 import datetime
+import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Mapping
 
@@ -36,15 +37,14 @@ async def process_symbol(
                 tf,
                 df_candles,
             )
-            tf_data_map[tf] = {'fractals': [], 'snr': None}
+            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': pd.DataFrame()}
             continue
             
         if isinstance(df_candles, pd.DataFrame) and not df_candles.empty:
             try:
                 report_fractals: List[Fractal] = analyze_fractals_v3(
                     df_candles,
-                    config.get('timezone_offset_hours', 0),
-                    #symbol=formatted_symbol,
+                    symbol=formatted_symbol,
                 )
                 snr_report = analyze_snr_data(
                     df_candles,
@@ -58,20 +58,19 @@ async def process_symbol(
                     formatted_symbol,
                     tf,
                 )
-                tf_data_map[tf] = {'fractals': [], 'snr': None}
+                tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
                 continue
 
-            tf_data_map[tf] = {'fractals': report_fractals, 'snr': snr_report}
+            tf_data_map[tf] = {'fractals': report_fractals, 'snr': snr_report, 'df': df_candles}
         else:
-            tf_data_map[tf] = {'fractals': [], 'snr': None}
+            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
             
     return tf_data_map
 
 
 async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str, Any]) -> None:
     """
-    Единый цикл анализа: опрос биржи, анализ по таймфреймам и отправка отчетов.
-    Используется как при старте, так и в планировщике.
+    Единый цикл анализа: опрос биржи, группировка по символам и отправка сводного отчета.
     """
     symbols = config.get('symbols', ['BTCUSDT'])
     timeframes = config.get('timeframes', ['1h', '4h', '1d'])
@@ -81,42 +80,32 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
     start_time = time.time()
     
     symbol_tasks = [process_symbol(session, sym, timeframes, limit, config) for sym in symbols]
-    symbol_data = await asyncio.gather(*symbol_tasks)
+    symbol_data_list = await asyncio.gather(*symbol_tasks)
     
-    # Формируем и отправляем отчет отдельно по каждому таймфрейму
-    for tf in timeframes:
-        snr_reports = []
-        for tf_data_map in symbol_data:
-            snr_data = tf_data_map.get(tf, {}).get('snr')
-            if snr_data is not None:
-                snr_reports.append(snr_data)
-        
-        if snr_reports:
-            report_text = format_fractal_raid_message(snr_reports, tf)
-            success = await send_telegram_message(
-                session=session,
-                token=config['telegram_token'],
-                chat_id=config['telegram_chat_id'],
-                text=report_text
-            )
-            if success:
-                print(f"[INFO] Fractal Raid report sent successfully for TF {tf}.")
-            else:
-                logger.error("Failed to send Fractal Raid report for TF %s", tf)
-                
+    # Собираем словарь формата: { "BTCUSDT": { "1h": {...}, "4h": {...} }, ... }
+    symbol_data_map = {
+        sym: tf_map 
+        for sym, tf_map in zip(symbols, symbol_data_list)
+    }
+
+    # Формируем единый сводный отчет с группировкой по символам
+    report_text = format_fractal_raid_message(symbol_data_map)
+    if report_text:
+        success = await send_telegram_message(
+            session=session,
+            token=config['telegram_token'],
+            chat_id=config['telegram_chat_id'],
+            text=report_text
+        )
+        if success:
+            print("[INFO] Consolidated Fractal Raid report sent successfully.")
+        else:
+            logger.error("Failed to send Fractal Raid report.")
+            
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
 
-
-async def main():
-    """Разовый запуск для тестов."""
-    config = load_settings()
-    async with aiohttp.ClientSession() as session:
-        await run_analysis_cycle(session, config)
-
-
 async def scheduler_loop():
-    """Периодический запуск по расписанию."""
     config = load_settings()
     print(f"[INFO] Scheduler started. Bot will run every hour at minute 03.")
     
@@ -124,8 +113,7 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            # Срабатывание на 3-й минуте часа
-            if now.minute == 9:
+            if now.minute == 5:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 
@@ -137,8 +125,6 @@ async def scheduler_loop():
 
 if __name__ == "__main__":
     try:
-        # Для разового теста можно вызвать asyncio.run(main())
-        # Для работы по расписанию используем scheduler_loop():
         asyncio.run(scheduler_loop())
     except KeyboardInterrupt:
         print("\n[INFO] Bot stopped by user.")

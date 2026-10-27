@@ -1,14 +1,11 @@
 # notifier.py
 import aiohttp
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 async def send_telegram_message(session: aiohttp.ClientSession, token: str, chat_id: str, text: str) -> bool:
-    """
-    Асинхронная отправка текстового сообщения в Telegram.
-    """
     if not token or token == "YOUR_BOT_TOKEN_HERE":
         print("[WARNING] Telegram token is not set in settings.json!")
         return False
@@ -35,40 +32,77 @@ async def send_telegram_message(session: aiohttp.ClientSession, token: str, chat
         print(f"[ERROR] Network error while sending Telegram message: {e}")
         return False
 
-def format_fractal_raid_message(reports: List[Dict[str, Any]], tf: str) -> str:
+
+def format_fractal_raid_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
     """
-    Формирует лаконичный отчет по Fractal_H / Fractal_L и Raid для выбранного TF.
+    Форматирует Fractal Raid Report:
+    - Группировка по символам.
+    - Для каждого таймфрейма (TF) ищем самый свежий Raid (минимальный raid_candles_ago) 
+      среди FH и FL, и выводим его в виде отдельной строки.
     """
-    lines = [f"<b>Fractal Raid Report | TF: {tf}</b>\n"]
-    
-    for rep in reports:
-        symbol = rep.get("symbol", "")
-        # Очищаем символ от /USDT или USDT (остается чистый тикер, например BTC)
+    lines = ["<b>Fractal Raid Report</b>\n"]
+    has_any_content = False
+    timeframes = ['1h', '4h', '1d']  # Или в том порядке, в котором вам привычнее
+
+    for symbol in sorted(symbol_data_map.keys()):
         clean_symbol = symbol.split('/')[0].replace('USDT', '')
-        
-        fh = rep.get("working_fh")
-        fl = rep.get("working_fl")
-        
-        lines.append(f"<b>{clean_symbol}</b>")
-        
-        # Fractal_H (зеленый эмодзи)
-        if fh:
-            fh_dist = fh.get('candles_ago', 0)
-            raid_candles = fh.get('raid_candles_ago')
-            raid_str = f" | Raid ({raid_candles})" if raid_candles is not None else ""
-            lines.append(f"  🟢 Fractal_H: <b>{fh.get('price')}</b> ({fh_dist}){raid_str}")
-        else:
-            lines.append("  🟢 Fractal_H: нет")
+        tf_map = symbol_data_map[symbol]
+
+        symbol_lines = []
+
+        for tf in timeframes:
+            tf_data = tf_map.get(tf)
+            if not tf_data:
+                continue
             
-        # Fractal_L (красный эмодзи)
-        if fl:
-            fl_dist = fl.get('candles_ago', 0)
-            raid_candles = fl.get('raid_candles_ago')
-            raid_str = f" | Raid ({raid_candles})" if raid_candles is not None else ""
-            lines.append(f"  🔴 Fractal_L: <b>{fl.get('price')}</b> ({fl_dist}){raid_str}")
-        else:
-            lines.append("  🔴 Fractal_L: нет")
+            snr_data = tf_data.get('snr')
+            if not snr_data:
+                continue
+
+            fh = snr_data.get('working_fh')
+            fl = snr_data.get('working_fl')
+
+            candidates = []
             
-        lines.append("") # пустая строка между символами
-        
+            # Проверяем FH на наличие Raid
+            if fh and fh.get('raid_candles_ago') is not None:
+                candidates.append({
+                    'type': 'Fractal_H',
+                    'emoji': '🔴',
+                    'price': fh.get('price'),
+                    'candles_ago': fh.get('candles_ago', 0),
+                    'raid_candles': fh.get('raid_candles_ago')
+                })
+                
+            # Проверяем FL на наличие Raid
+            if fl and fl.get('raid_candles_ago') is not None:
+                candidates.append({
+                    'type': 'Fractal_L',
+                    'emoji': '🟢',
+                    'price': fl.get('price'),
+                    'candles_ago': fl.get('candles_ago', 0),
+                    'raid_candles': fl.get('raid_candles_ago')
+                })
+
+            if not candidates:
+                continue
+
+            # Выбираем кандидат с МЕНЬШИМ значением raid_candles (самый свежий Raid)
+            best_raid = min(candidates, key=lambda x: x['raid_candles'])
+
+            # Формируем строчку для данного таймфрейма
+            symbol_lines.append(
+                f"  {best_raid['emoji']} <b>{tf.upper()}</b> | {best_raid['type']}: "
+                f"<b>{best_raid['price']}</b> ({best_raid['candles_ago']}) | Raid ({best_raid['raid_candles']})"
+            )
+
+        if symbol_lines:
+            has_any_content = True
+            lines.append(f"<b>{clean_symbol}</b>")
+            lines.extend(symbol_lines)
+            lines.append("")  # пустая строка между символами
+
+    if not has_any_content:
+        return "<b>Fractal Raid Report</b>\n\nℹ️ Активных Raid не найдено."
+
     return "\n".join(lines)
