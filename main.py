@@ -1,4 +1,4 @@
-# main.py (или main_2.py)
+# main.py
 import asyncio
 import aiohttp
 import logging
@@ -11,62 +11,10 @@ from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
 from snr import analyze_snr_data
-from notifier import format_snr_debug_message, send_telegram_message
+from notifier import format_fractal_raid_message, send_telegram_message
 
 logger = logging.getLogger(__name__)
-
-
-def format_multi_tf_report(
-    symbol: str, tf_data_map: Mapping[str, Mapping[str, Any]]
-) -> Optional[str]:
-    clean_symbol = symbol.split('/')[0]
-    
-    has_data = any(
-        data.get('fractals') 
-        for data in tf_data_map.values()
-    )
-    if not has_data:
-        return None
-
-    message = f"<b>{clean_symbol}</b>\n"
-    priority_tfs = ['1h', '4h', '1d']
-    
-    # LONG BLOCK (FL)
-    fl_parts = []
-    for tf in priority_tfs:
-        tf_info = tf_data_map.get(tf, {})
-        fractals = tf_info.get('fractals', [])
-        working_fl = [
-            f for f in fractals 
-            if f['status'] == 'Working' and f['type'] == 'FL' and f.get('breakout_type') == 'Raid'
-        ]
-        
-        for f in working_fl:
-            date_str = f['datetime'].strftime('%d%b').lower()
-            fl_parts.append(f"*{tf} {f['price']}/{date_str}")
-
-    if fl_parts:
-        message += f"FL " + " ".join(fl_parts) + "\n"
-
-    # SHORT BLOCK (FH)
-    fh_parts = []
-    for tf in priority_tfs:
-        tf_info = tf_data_map.get(tf, {})
-        fractals = tf_info.get('fractals', [])
-        working_fh = [
-            f for f in fractals 
-            if f['status'] == 'Working' and f['type'] == 'FH' and f.get('breakout_type') == 'Raid'
-        ]
-        
-        for f in working_fh:
-            date_str = f['datetime'].strftime('%d%b').lower()
-            fh_parts.append(f"*{tf} {f['price']}/{date_str}")
-            
-    if fh_parts:
-        message += f"FH " + " ".join(fh_parts) + "\n"
-        
-    return message
-
+		
 async def process_symbol(
     session: aiohttp.ClientSession,
     formatted_symbol: str,
@@ -76,12 +24,10 @@ async def process_symbol(
 ) -> Dict[str, Dict[str, Any]]:
     tf_data_map = {}
     
-    # Создаем задачи для одновременного запроса всех таймфреймов по текущей монете
     tasks = [fetch_bingx_ohlcv_async(session, formatted_symbol, tf, limit) for tf in timeframes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     for tf, df_candles in zip(timeframes, results):
-        # Безопасная проверка на исключение или то, что это не DataFrame
         if isinstance(df_candles, BaseException):
             logger.error(
                 "Unable to fetch candles for %s (%s): %s",
@@ -118,24 +64,14 @@ async def process_symbol(
         else:
             tf_data_map[tf] = {'fractals': [], 'snr': None}
             
-    msg_text = format_multi_tf_report(formatted_symbol, tf_data_map)
-    
-    if msg_text:
-        await send_telegram_message(
-            session=session,
-            token=config['telegram_token'],
-            chat_id=config['telegram_chat_id'],
-            text=msg_text
-        )
-        print(f"[INFO] Consolidated Telegram message sent for {formatted_symbol}.")
-    else:
-        print(f"[INFO] No valid data found for {formatted_symbol}, message skipped.")
+    # Убрали отправку multi_tf сообщений по каждому символу отдельно.
+    # Теперь отправка происходит строго по таймфреймам в scheduler_loop.
     return tf_data_map
 
 async def main():
     config = load_settings()
     
-    symbols = config.get('symbols', ['BTC/USDT'])
+    symbols = config.get('symbols', ['BTCUSDT'])
     timeframes = config.get('timeframes', ['1h', '4h', '1d'])
     limit = config.get('limit', 100)
     
@@ -144,14 +80,32 @@ async def main():
     
     async with aiohttp.ClientSession() as session:
         symbol_tasks = [process_symbol(session, sym, timeframes, limit, config) for sym in symbols]
-        await asyncio.gather(*symbol_tasks)
+        symbol_data = await asyncio.gather(*symbol_tasks)
+        
+        # Ручной тестовый запуск отправки Fractal Raid Report сразу при старте (для проверки)
+        for tf in timeframes:
+            snr_reports = []
+            for tf_data_map in symbol_data:
+                snr_data = tf_data_map.get(tf, {}).get('snr')
+                if snr_data is not None:
+                    snr_reports.append(snr_data)
+            
+            if snr_reports:
+                debug_msg = format_fractal_raid_message(snr_reports, tf)
+                await send_telegram_message(
+                    session=session,
+                    token=config['telegram_token'],
+                    chat_id=config['telegram_chat_id'],
+                    text=debug_msg
+                )
+                print(f"[INFO] Fractal Raid report sent for TF {tf}.")
         
     elapsed = time.time() - start_time
     print(f"[INFO] All symbols processed in {elapsed:.2f} seconds.")
 
 async def scheduler_loop():
     config = load_settings()
-    symbols = config.get('symbols', ['BTC/USDT'])
+    symbols = config.get('symbols', ['BTCUSDT'])
     timeframes = config.get('timeframes', ['1h', '4h', '1d'])
     limit = config.get('limit', 100)
     
@@ -176,14 +130,14 @@ async def scheduler_loop():
                             snr_reports.append(snr_data)
                     
                     if snr_reports:
-                        debug_msg = format_snr_debug_message(snr_reports, tf)
+                        debug_msg = format_fractal_raid_message(snr_reports, tf)
                         await send_telegram_message(
                             session=session,
                             token=config['telegram_token'],
                             chat_id=config['telegram_chat_id'],
                             text=debug_msg
                         )
-                        print(f"[INFO] SNR Debug report sent for TF {tf}.")
+                        print(f"[INFO] Fractal Raid report sent for TF {tf}.")
                 
                 elapsed = time.time() - start_time
                 print(f"[INFO] Cycle finished in {elapsed:.2f} seconds. Waiting for the next hour...")
@@ -196,4 +150,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(scheduler_loop())
     except KeyboardInterrupt:
-        print("\n[INFO] Bot stopped by user.")
+        print("\n[INFO] Stopped by user.")

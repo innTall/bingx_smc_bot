@@ -20,7 +20,6 @@ async def send_telegram_message(session: aiohttp.ClientSession, token: str, chat
         "parse_mode": "HTML"
     }
     
-    # Исправлено: передаем корректный объект ClientTimeout вместо простого числа
     timeout = aiohttp.ClientTimeout(total=10)
     
     try:
@@ -36,44 +35,39 @@ async def send_telegram_message(session: aiohttp.ClientSession, token: str, chat
         print(f"[ERROR] Network error while sending Telegram message: {e}")
         return False
 
-def format_snr_debug_message(reports: List[Dict[str, Any]], tf: str) -> str:
+def format_fractal_raid_message(reports: List[Dict[str, Any]], tf: str) -> str:
     """
-    Формирует простой черновой отчет по Working FH/FL и Raid для проверки логики.
+    Формирует лаконичный отчет по Fractal_H / Fractal_L и Raid для выбранного TF.
     """
-    lines = [f"<b>🔍 SNR Debug Report | TF: {tf}</b>\n"]
+    lines = [f"<b>Fractal Raid Report | TF: {tf}</b>\n"]
     
     for rep in reports:
-        symbol = rep.get("symbol")
+        symbol = rep.get("symbol", "")
+        # Очищаем символ от /USDT или USDT (остается чистый тикер, например BTC)
+        clean_symbol = symbol.split('/')[0].replace('USDT', '')
+        
         fh = rep.get("working_fh")
         fl = rep.get("working_fl")
         
-        lines.append(f"<b>🔹 {symbol}</b>")
+        lines.append(f"<b>{clean_symbol}</b>")
         
-        # Working FH
+        # Fractal_H (зеленый эмодзи)
         if fh:
             fh_dist = fh.get('candles_ago', 0)
             raid_candles = fh.get('raid_candles_ago')
-            raid_str = f" | Raid (назад: {raid_candles} св.)" if raid_candles is not None else ""
-            
-            dist_val = fh.get('fh_fl_to_raid_distance')
-            dist_str = f" | Дист. до Raid: {dist_val} св." if dist_val is not None else ""
-            
-            lines.append(f"  • Working FH: <b>{fh.get('price')}</b> ({fh_dist} св. назад){raid_str}{dist_str}")
+            raid_str = f" | Raid ({raid_candles})" if raid_candles is not None else ""
+            lines.append(f"  🟢 Fractal_H: <b>{fh.get('price')}</b> ({fh_dist}){raid_str}")
         else:
-            lines.append("  • Working FH: нет")
+            lines.append("  🟢 Fractal_H: нет")
             
-        # Working FL
+        # Fractal_L (красный эмодзи)
         if fl:
             fl_dist = fl.get('candles_ago', 0)
             raid_candles = fl.get('raid_candles_ago')
-            raid_str = f" | Raid (назад: {raid_candles} св.)" if raid_candles is not None else ""
-            
-            dist_val = fl.get('fh_fl_to_raid_distance')
-            dist_str = f" | Дист. до Raid: {dist_val} св." if dist_val is not None else ""
-            
-            lines.append(f"  • Working FL: <b>{fl.get('price')}</b> ({fl_dist} св. назад){raid_str}{dist_str}")
+            raid_str = f" | Raid ({raid_candles})" if raid_candles is not None else ""
+            lines.append(f"  🔴 Fractal_L: <b>{fl.get('price')}</b> ({fl_dist}){raid_str}")
         else:
-            lines.append("  • Working FL: нет")
+            lines.append("  🔴 Fractal_L: нет")
             
         lines.append("") # пустая строка между символами
         
