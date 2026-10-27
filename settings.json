@@ -3,6 +3,8 @@
   "timeframes": ["1h", "4h", "1d"],
   "limit": 100,
   "timezone_offset_hours": 3,
+  "send_fractal_raid_report": true,
+  "send_kl_snr_report": true,
   "SNR_candles": 5,
   "SNR_history": 50,
   "SL_max": 5

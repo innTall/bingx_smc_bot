@@ -12,7 +12,7 @@ from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
 from snr import analyze_snr_data
-from notifier import format_fractal_raid_message, send_telegram_message
+from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,9 @@ async def process_symbol(
                     df_candles,
                     symbol=formatted_symbol,
                 )
+                # Убран устаревший timezone_offset_hours, чтобы избежать дублирования symbol
                 snr_report = analyze_snr_data(
                     df_candles,
-                    config.get('timezone_offset_hours', 0),
                     symbol=formatted_symbol,
                     fractals=report_fractals,
                 )
@@ -88,19 +88,35 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
         for sym, tf_map in zip(symbols, symbol_data_list)
     }
 
-    # Формируем единый сводный отчет с группировкой по символам
-    report_text = format_fractal_raid_message(symbol_data_map)
-    if report_text:
-        success = await send_telegram_message(
-            session=session,
-            token=config['telegram_token'],
-            chat_id=config['telegram_chat_id'],
-            text=report_text
-        )
-        if success:
-            print("[INFO] Consolidated Fractal Raid report sent successfully.")
-        else:
-            logger.error("Failed to send Fractal Raid report.")
+    # --- БЛОК 1: Fractal Raid Report ---
+    if config.get('send_fractal_raid_report', True):
+        raid_report_text = format_fractal_raid_message(symbol_data_map)
+        if raid_report_text:
+            success = await send_telegram_message(
+                session=session,
+                token=config['telegram_token'],
+                chat_id=config['telegram_chat_id'],
+                text=raid_report_text
+            )
+            if success:
+                print("[INFO] Fractal Raid report sent successfully.")
+            else:
+                logger.error("Failed to send Fractal Raid report.")
+
+    # --- БЛОК 2: KL SNR Report ---
+    if config.get('send_kl_snr_report', True):
+        snr_report_text = format_kl_snr_message(symbol_data_map)
+        if snr_report_text:
+            success = await send_telegram_message(
+                session=session,
+                token=config['telegram_token'],
+                chat_id=config['telegram_chat_id'],
+                text=snr_report_text
+            )
+            if success:
+                print("[INFO] KL SNR report sent successfully.")
+            else:
+                logger.error("Failed to send KL SNR report.")
             
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
@@ -113,7 +129,7 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            if now.minute == 5:
+            if now.minute == 15:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 

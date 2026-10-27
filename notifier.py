@@ -106,3 +106,48 @@ def format_fractal_raid_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> O
         return "<b>Fractal Raid Report</b>\n\nℹ️ Активных Raid не найдено."
 
     return "\n".join(lines)
+
+def format_kl_snr_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> str:
+    """
+    Простой тестовый шаблон отчета KL SNR для проверки работы нового алгоритма.
+    """
+    lines = ["<b>KL SNR Report</b>\n"]
+    has_content = False
+
+    for symbol in sorted(symbol_data_map.keys()):
+        clean_symbol = symbol.split('/')[0].replace('USDT', '')
+        tf_map = symbol_data_map[symbol]
+        
+        symbol_lines = []
+        for tf, tf_data in tf_map.items():
+            snr_data = tf_data.get('snr')
+            if not snr_data:
+                continue
+
+            for f_key, label, emoji in [("working_fh", "FH", "🔴"), ("working_fl", "FL", "🟢")]:
+                f_item = snr_data.get(f_key)
+                if not f_item or f_item.get('raid_candles_ago') is None:
+                    continue
+
+                kl = f_item.get('kl_snr')
+                if kl:
+                    kl_price = kl['level_price']
+                    c_ago = kl['candles_ago_left']
+                    symbol_lines.append(
+                        f"  {emoji} <b>{tf.upper()}</b> | {label} Raid: Level <b>{kl_price}</b> (баров назад: {c_ago})"
+                    )
+                else:
+                    symbol_lines.append(
+                        f"  {emoji} <b>{tf.upper()}</b> | {label} Raid: KL SNR не найден"
+                    )
+
+        if symbol_lines:
+            has_content = True
+            lines.append(f"<b>{clean_symbol}</b>")
+            lines.extend(symbol_lines)
+            lines.append("")
+
+    if not has_content:
+        return "<b>KL SNR Report</b>\n\nℹ️ Уровни KL SNR не обнаружены."
+
+    return "\n".join(lines)
