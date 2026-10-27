@@ -17,8 +17,9 @@ def analyze_snr_data(
     fractals: Optional[List[Fractal]] = None,
 ) -> SNRReport:
     """Build a debug summary from the analyzer's already verified fractals."""
+    # Убираем tz_offset, так как analyze_fractals_v3 больше его не принимает
     verified_fractals = (
-        analyze_fractals_v3(df, tz_offset, symbol)
+        analyze_fractals_v3(df, symbol=symbol)
         if fractals is None
         else fractals
     )

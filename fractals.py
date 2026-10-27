@@ -1,4 +1,4 @@
-from datetime import timedelta
+# fractals.py
 from numbers import Integral
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -43,21 +43,17 @@ def _validated_frame(
 
 def analyze_fractals_v3(
     df: Optional[pd.DataFrame],
-    tz_offset: float,
     symbol: str = "UNKNOWN",
 ) -> List[Fractal]:
+    """
+    Чистый математический анализ фракталов и рейдов (без примеси таймзон и дат).
+    """
     frame = _validated_frame(df)
     if len(frame) < 3:
         return []
 
-    try:
-        timezone_offset = float(tz_offset)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid timezone offset: {tz_offset!r}") from exc
-
     highs = frame["high"].to_numpy()
     lows = frame["low"].to_numpy()
-    timestamps = frame["timestamp"].to_numpy()
     fractals: List[Fractal] = []
 
     for index in range(1, len(frame) - 1):
@@ -71,16 +67,12 @@ def analyze_fractals_v3(
             lows[index],
             lows[index + 1],
         )
-        local_datetime = pd.to_datetime(timestamps[index], unit="ms") + timedelta(
-            hours=timezone_offset
-        )
 
         if current_high > previous_high and current_high >= next_high:
             fractals.append(
                 {
                     "type": "FH",
                     "index": index,
-                    "datetime": local_datetime,
                     "price": current_high,
                 }
             )
@@ -89,7 +81,6 @@ def analyze_fractals_v3(
                 {
                     "type": "FL",
                     "index": index,
-                    "datetime": local_datetime,
                     "price": current_low,
                 }
             )
@@ -141,7 +132,7 @@ def _find_raid_index(df: pd.DataFrame, fractal: Mapping[str, Any]) -> Optional[i
     fractal_index = fractal.get("index")
     if fractal_type not in {"FH", "FL"}:
         raise ValueError(f"Invalid fractal type: {fractal_type!r}")
-    if not isinstance(fractal_index, Integral) or not 0 <= fractal_index < len(df):
+    if not isinstance(fractal_index, Integral) or not 0 <= int(fractal_index) < len(df):
         raise ValueError(f"Invalid fractal index: {fractal_index!r}")
     fractal_index = int(fractal_index)
 
