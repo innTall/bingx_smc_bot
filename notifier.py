@@ -188,3 +188,82 @@ def format_kl_snr_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> Optiona
         return "<b>KL SNR Report</b>\n\nℹ️ No active KL SNR found."
 
     return "\n".join(lines)
+
+def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """
+    Форматирует отчет Trading Levels:
+    - Группировка по символам.
+    - Для каждого таймфрейма определяется самый последний Raid (между FH и FL).
+    - Выводятся Entry, SL и процент риска строго для последнего рейда. 
+    - Если сформированного SNR нет, таймфрейм просто пропускается (никаких прочерков и старых данных).
+    """
+    lines = ["<b>Trading Levels Report</b>\n"]
+    has_content = False
+    timeframes = ['1h', '4h', '1d']
+
+    for symbol in sorted(symbol_data_map.keys()):
+        clean_symbol = symbol.split('/')[0].replace('USDT', '')
+        tf_map = symbol_data_map[symbol]
+        
+        symbol_lines = []
+        for tf in timeframes:
+            tf_data = tf_map.get(tf)
+            if not tf_data:
+                continue
+            
+            snr_data = tf_data.get('snr')
+            if not snr_data:
+                continue
+
+            fh = snr_data.get('working_fh')
+            fl = snr_data.get('working_fl')
+
+            raid_candidates = []
+
+            # Собираем данные по пробитым фракталам для текущего таймфрейма
+            if fh and fh.get('raid_candles_ago') is not None:
+                raid_candidates.append({
+                    'type': 'FH',
+                    'emoji': '🔴',
+                    'item': fh,
+                    'raid_candles': fh.get('raid_candles_ago')
+                })
+
+            if fl and fl.get('raid_candles_ago') is not None:
+                raid_candidates.append({
+                    'type': 'FL',
+                    'emoji': '🟢',
+                    'item': fl,
+                    'raid_candles': fl.get('raid_candles_ago')
+                })
+
+            if not raid_candidates:
+                continue
+
+            # Строго выбираем САМЫЙ ПОСЛЕДНИЙ Raid (с минимальным raid_candles_ago)
+            latest_raid = min(raid_candidates, key=lambda x: x['raid_candles'])
+            
+            item = latest_raid['item']
+            formed = item.get('snr_formed')
+            emoji = latest_raid['emoji']
+            l_type = latest_raid['type']
+
+            # Если сформированного SNR нет — просто пропускаем этот таймфрейм
+            if not formed:
+                continue
+
+            symbol_lines.append(
+                f"  {emoji} <b>{tf.upper()}</b> | {l_type} | "
+                f"Entry: <b>{formed['entry']}</b> | SL: <b>{formed['stop_loss']}</b> ({formed['sl_percent']}%)"
+            )
+
+        if symbol_lines:
+            has_content = True
+            lines.append(f"<b>{clean_symbol}</b>")
+            lines.extend(symbol_lines)
+            lines.append("")
+
+    if not has_content:
+        return None  # Если по всем символам нет активных уровней, сообщение вообще не отправляется
+
+    return "\n".join(lines)

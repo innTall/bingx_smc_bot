@@ -12,7 +12,7 @@ from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
 from snr import analyze_snr_data
-from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message
+from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,30 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
                 print("[INFO] KL SNR report sent successfully.")
             else:
                 logger.error("Failed to send KL SNR report.")
-            
+
+    # --- БЛОК: Trading Levels Report ---
+    if config.get('send_trading_levels_report', False):
+        # Передаем параметры из конфига в analyze_snr_data, если они там нужны
+        # (убедитесь, что snr_candles и sl_max считываются из config и передаются)
+        snr_candles = config.get('SNR_candles', 5)
+        sl_max = config.get('SL_max', 5.0)
+        
+        # Обратите внимание, что внутри process_symbol функция analyze_snr_data 
+        # должна принимать и использовать эти параметры из конфига!
+        
+        trading_levels_text = format_trading_levels_message(symbol_data_map)
+        if trading_levels_text:
+            success = await send_telegram_message(
+                session=session,
+                token=config['telegram_token'],
+                chat_id=config['telegram_chat_id'],
+                text=trading_levels_text
+            )
+            if success:
+                print("[INFO] Trading Levels report sent successfully.")
+            else:
+                logger.error("Failed to send Trading Levels report.")
+
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
 
@@ -131,7 +154,7 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            if now.minute == 37:
+            if now.minute == 3:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 
