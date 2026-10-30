@@ -133,7 +133,7 @@ def _find_formed_snr(
     return {
         "entry": entry,
         "stop_loss": stop_loss,
-        "sl_percent": round(sl_percent, 2),
+        "sl_percent": round(sl_percent, 1),
         "candles_ago": candles_ago,
         "formation_index": formation_idx
     }
@@ -144,58 +144,61 @@ def analyze_snr_data(
     fractals: Optional[List[Fractal]] = None,
     snr_candles: int = 5,
     sl_max: float = 5.0,
+    last_candles_snr: int = 10,  # Новое ограничение по свечам для сформированного SNR
 ) -> SNRReport:
-    """Анализирует фракталы и находит для них KL SNR и сформированные SNR уровни."""
+    """Анализирует фракталы и собирает актуальные сформированные SNR в пределах окна last_candles_snr."""
     verified_fractals = (
         analyze_fractals_v3(df, symbol=symbol)
         if fractals is None
         else fractals
     )
     last_candle_index = len(df) - 1
-    working: Dict[str, Optional[SNRFractal]] = {"FH": None, "FL": None}
+    
+    # Теперь будем собирать списки валидных сформированных уровней для FH и FL
+    valid_fh_list: List[Dict[str, Any]] = []
+    valid_fl_list: List[Dict[str, Any]] = []
 
     for fractal in verified_fractals:
         fractal_type = fractal.get("type")
         fractal_index = fractal.get("index")
-        if fractal.get("status") != "Working" or fractal_type not in working:
+        if fractal.get("status") != "Working" or fractal_type not in ["FH", "FL"]:
             continue
         
         if fractal_index is None:
             continue
         fractal_index_int = int(fractal_index)
-        
         raid_index = fractal.get("broken_at")
 
-        raid_candles_ago = None
-        r_idx_int = None
         if raid_index is not None:
             r_idx_int = int(raid_index)
-            raid_candles_ago = last_candle_index - r_idx_int
-
-        item_data: SNRFractal = {
-            "type": fractal_type,
-            "price": fractal["price"],
-            "candles_ago": last_candle_index - fractal_index_int,
-            "breakout_type": fractal.get("breakout_type", "Unknown"),
-            "raid_candles_ago": raid_candles_ago,
-            "kl_snr": None,
-        }
-
-        if r_idx_int is not None:
-            item_data["fh_fl_to_raid_distance"] = r_idx_int - fractal_index_int
             kl = _find_kl_snr(df, fractal_index_int, r_idx_int, fractal_type, snr_candles)
-            item_data["kl_snr"] = kl
 
             if kl:
-                # Проверяем формирование SNR вправо от рейда с учетом параметров
                 formed_snr = _find_formed_snr(df, kl, r_idx_int, fractal_type, snr_candles, sl_max)
                 if formed_snr:
-                    item_data["snr_formed"] = formed_snr
+                    # Проверяем главное условие свежести: сформированный SNR должен быть 
+                    # в пределах последних last_candles_snr свечей от конца графика
+                    if formed_snr["candles_ago"] <= last_candles_snr:
+                        signal_data = {
+                            "type": fractal_type,
+                            "price": fractal["price"],
+                            "entry": formed_snr["entry"],
+                            "stop_loss": formed_snr["stop_loss"],
+                            "sl_percent": formed_snr["sl_percent"],
+                            "candles_ago": formed_snr["candles_ago"],
+                            "formation_index": formed_snr["formation_index"]
+                        }
+                        if fractal_type == "FH":
+                            valid_fh_list.append(signal_data)
+                        else:
+                            valid_fl_list.append(signal_data)
 
-        working[fractal_type] = item_data
+    # Выбираем самый свежий (с минимальным candles_ago) для Long и для Short, если их несколько в окне
+    best_fh = min(valid_fh_list, key=lambda x: x["candles_ago"]) if valid_fh_list else None
+    best_fl = min(valid_fl_list, key=lambda x: x["candles_ago"]) if valid_fl_list else None
 
     return {
         "symbol": symbol,
-        "working_fh": working["FH"],
-        "working_fl": working["FL"],
+        "working_fh": best_fh,  #поддерживаем совместимость ключей
+        "working_fl": best_fl,
     }
