@@ -11,8 +11,9 @@ from typing import Any, Dict, List, Mapping, Coroutine
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
+from fvg import detect_bearish_fvg, detect_bullish_fvg
 from snr import analyze_snr_data
-from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
+from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message, format_kl_fvg_messages
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,20 @@ async def process_symbol(
                 tf,
                 df_candles,
             )
-            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': pd.DataFrame()}
+            tf_data_map[tf] = {
+                'fractals': [],
+                'snr': None,
+                'fvg': {'bullish': [], 'bearish': []},
+                'df': pd.DataFrame(),
+            }
             continue
             
         if isinstance(df_candles, pd.DataFrame) and not df_candles.empty:
             try:
+                # Exchange candles remain oldest-first for fractal/SNR analysis.
+                newest_first = df_candles.iloc[::-1].reset_index(drop=True)
+                bullish_fvgs = detect_bullish_fvg(newest_first)
+                bearish_fvgs = detect_bearish_fvg(newest_first)
                 report_fractals: List[Fractal] = analyze_fractals_v3(
                     df_candles,
                     symbol=formatted_symbol,
@@ -57,12 +67,27 @@ async def process_symbol(
                     formatted_symbol,
                     tf,
                 )
-                tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
+                tf_data_map[tf] = {
+                    'fractals': [],
+                    'snr': None,
+                    'fvg': {'bullish': [], 'bearish': []},
+                    'df': df_candles,
+                }
                 continue
 
-            tf_data_map[tf] = {'fractals': report_fractals, 'snr': snr_report, 'df': df_candles}
+            tf_data_map[tf] = {
+                'fractals': report_fractals,
+                'snr': snr_report,
+                'fvg': {'bullish': bullish_fvgs, 'bearish': bearish_fvgs},
+                'df': df_candles,
+            }
         else:
-            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
+            tf_data_map[tf] = {
+                'fractals': [],
+                'snr': None,
+                'fvg': {'bullish': [], 'bearish': []},
+                'df': df_candles,
+            }
             
     return tf_data_map
 
@@ -120,7 +145,7 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
             else:
                 logger.error("Failed to send KL SNR report.")
 
-    # --- БЛОК: Trading Levels Report ---
+    # --- БЛОК 3: Trading Levels Report ---
     if config.get('send_trading_levels_report', False):
         # Передаем параметры из конфига в analyze_snr_data, если они там нужны
         # (убедитесь, что snr_candles и sl_max считываются из config и передаются)
@@ -143,6 +168,21 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
             else:
                 logger.error("Failed to send Trading Levels report.")
 
+    # --- БЛОК 4: KL FVG Report ---
+    if config.get('send_kl_fvg_report', False):
+        fvg_messages = format_kl_fvg_messages(symbol_data_map)
+        for clean_symbol, fvg_text in fvg_messages:
+            success = await send_telegram_message(
+                session=session,
+                token=config['telegram_token'],
+                chat_id=config['telegram_chat_id'],
+                text=fvg_text
+            )
+            if success:
+                print(f"[INFO] KL FVG report for {clean_symbol} sent successfully.")
+            else:
+                logger.error(f"Failed to send KL FVG report for {clean_symbol}.")
+
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
 
@@ -154,7 +194,7 @@ async def scheduler_loop():
         while True:
             now = datetime.datetime.now()
             
-            if now.minute == 3:
+            if now.minute == 16:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 

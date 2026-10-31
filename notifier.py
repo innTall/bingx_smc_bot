@@ -246,3 +246,56 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
         return None
 
     return "\n".join(lines)
+
+def format_kl_fvg_messages(symbol_data_map: Dict[str, Dict[str, Any]]) -> List[tuple]:
+    """
+    Формирует список независимых FVG отчетов (по одному сообщению на каждый символ).
+    Возвращает список пар: (clean_symbol, text_message).
+    """
+    messages = []
+    timeframes = ['1h', '4h', '1d']
+
+    for symbol in sorted(symbol_data_map.keys()):
+        clean_symbol = symbol.split('/')[0].replace('USDT', '')
+        tf_map = symbol_data_map[symbol]
+        
+        symbol_lines = [f"<b>KL FVG Report — {clean_symbol}</b>\n"]
+        has_content = False
+
+        for tf in timeframes:
+            tf_data = tf_map.get(tf)
+            if not tf_data:
+                continue
+            
+            fvg_data = tf_data.get('fvg')
+            if not fvg_data:
+                continue
+
+            bullish_list = fvg_data.get('bullish', [])
+            bearish_list = fvg_data.get('bearish', [])
+
+            if not bullish_list and not bearish_list:
+                continue
+
+            tf_signals = []
+
+            for b_fvg in bullish_list:
+                tf_signals.append(
+                    f"  🟢 <b>{tf.upper()}</b> | Bullish FVG: "
+                    f"IMB <b>{b_fvg.get('kl_imb')}</b> | FF <b>{b_fvg.get('kl_ff')}</b> (C2: {b_fvg.get('index_c2')})"
+                )
+
+            for r_fvg in bearish_list:
+                tf_signals.append(
+                    f"  🔴 <b>{tf.upper()}</b> | Bearish FVG: "
+                    f"IMB <b>{r_fvg.get('kl_imb')}</b> | FF <b>{r_fvg.get('kl_ff')}</b> (C2: {r_fvg.get('index_c2')})"
+                )
+
+            if tf_signals:
+                has_content = True
+                symbol_lines.extend(tf_signals)
+
+        if has_content:
+            messages.append((clean_symbol, "\n".join(symbol_lines)))
+
+    return messages
