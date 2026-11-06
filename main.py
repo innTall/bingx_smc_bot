@@ -13,6 +13,7 @@ from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
 from snr import analyze_snr_data
 from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
+from fvg import detect_bullish_fvg_and_raids
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ async def process_symbol(
     tasks = [fetch_bingx_ohlcv_async(session, formatted_symbol, tf, limit) for tf in timeframes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
+    # Получаем fvg_history_limit из конфига (по умолчанию 25)
+    fvg_history_limit = config.get('FVG_history', 25)
+
     for tf, df_candles in zip(timeframes, results):
         if isinstance(df_candles, BaseException):
             logger.error(
@@ -37,32 +41,49 @@ async def process_symbol(
                 tf,
                 df_candles,
             )
-            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': pd.DataFrame()}
+            tf_data_map[tf] = {'fractals': [], 'snr': None, 'fvgs': [], 'df': pd.DataFrame()}
             continue
             
         if isinstance(df_candles, pd.DataFrame) and not df_candles.empty:
             try:
+                # 1. Анализ фракталов
                 report_fractals: List[Fractal] = analyze_fractals_v3(
                     df_candles,
                     symbol=formatted_symbol,
                 )
+                
+                # 2. Анализ SNR
                 snr_report = analyze_snr_data(
                     df_candles,
                     symbol=formatted_symbol,
                     fractals=report_fractals,
                 )
+
+                # 3. Анализ Bullish FVG и их Raid (текущий шаг)
+                bullish_fvgs = detect_bullish_fvg_and_raids(
+                    df=df_candles,
+                    symbol=formatted_symbol,
+                    tf=tf,
+                    fvg_history_limit=fvg_history_limit
+                )
+
             except (KeyError, TypeError, ValueError, OverflowError):
                 logger.exception(
                     "Unable to analyze candles for %s (%s)",
                     formatted_symbol,
                     tf,
                 )
-                tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
+                tf_data_map[tf] = {'fractals': [], 'snr': None, 'fvgs': [], 'df': df_candles}
                 continue
 
-            tf_data_map[tf] = {'fractals': report_fractals, 'snr': snr_report, 'df': df_candles}
+            tf_data_map[tf] = {
+                'fractals': report_fractals,
+                'snr': snr_report,
+                'fvgs': bullish_fvgs,
+                'df': df_candles
+            }
         else:
-            tf_data_map[tf] = {'fractals': [], 'snr': None, 'df': df_candles}
+            tf_data_map[tf] = {'fractals': [], 'snr': None, 'fvgs': [], 'df': df_candles}
             
     return tf_data_map
 
@@ -73,18 +94,16 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
     """
     symbols = config.get('symbols', ['BTCUSDT'])
     timeframes = config.get('timeframes', ['1h', '4h', '1d'])
-    limit = config.get('limit', 100)
+    limit = config.get('limit', 25)
     
     print(f"\n[INFO] Starting analysis cycle for symbols: {symbols} | Timeframes: {timeframes}")
     start_time = time.time()
     
-    # Явно типизируем список корутин для корректной работы asyncio.gather под тайпчекером
     symbol_tasks: List[Coroutine[Any, Any, Dict[str, Dict[str, Any]]]] = [
         process_symbol(session, sym, timeframes, limit, config) for sym in symbols
     ]
     symbol_data_list = await asyncio.gather(*symbol_tasks)
     
-    # Собираем словарь формата: { "BTCUSDT": { "1h": {...}, "4h": {...} }, ... }
     symbol_data_map = {
         sym: tf_map 
         for sym, tf_map in zip(symbols, symbol_data_list)
@@ -120,16 +139,8 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
             else:
                 logger.error("Failed to send KL SNR report.")
 
-    # --- БЛОК: Trading Levels Report ---
+    # --- БЛОК 3: Trading Levels Report ---
     if config.get('send_trading_levels_report', False):
-        # Передаем параметры из конфига в analyze_snr_data, если они там нужны
-        # (убедитесь, что snr_candles и sl_max считываются из config и передаются)
-        snr_candles = config.get('SNR_candles', 5)
-        sl_max = config.get('SL_max', 5.0)
-        
-        # Обратите внимание, что внутри process_symbol функция analyze_snr_data 
-        # должна принимать и использовать эти параметры из конфига!
-        
         trading_levels_text = format_trading_levels_message(symbol_data_map)
         if trading_levels_text:
             success = await send_telegram_message(
@@ -148,12 +159,13 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
 
 async def scheduler_loop():
     config = load_settings()
-    print(f"[INFO] Scheduler started. Bot will run every hour at minute 03.")
+    print(f"[INFO] Scheduler started. Bot will run every hour.")
     
     async with aiohttp.ClientSession() as session:
         while True:
             now = datetime.datetime.now()
             
+            # Можете настроить минуту под себя для проверки
             if now.minute == 3:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
