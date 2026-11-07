@@ -166,7 +166,7 @@ async def scheduler_loop():
             now = datetime.datetime.now()
             
             # Можете настроить минуту под себя для проверки
-            if now.minute == 3:
+            if now.minute == 46:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 

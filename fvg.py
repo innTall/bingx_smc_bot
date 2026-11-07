@@ -3,16 +3,17 @@ import pandas as pd
 
 def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, fvg_history_limit: int = 25):
     """
-    Поиск Bullish FVG и их пробоев (Raid) для oldest-first массивов.
-    C1 (i) -> C2 (i+1) -> C3 (i+2).
-    Диапазон поиска Raid: от C3 до конца массива (справа налево по времени, т.е. от c3_idx + 1 до n-1).
+    Финальная версия для Bullish FVG:
+    - Поиск FVG в oldest-first массиве.
+    - Поиск пробоев (IMB / FF) с исключением свечей формирования.
+    - Выбор ровно ОДНОГО самого свежего (последнего по времени) Raid для символа и TF.
     """
     fvgs = []
     n = len(df)
     if n < 4:
-        return fvgs
+        return []
 
-    # 1. Поиск Bullish FVG (идем от начала до n - 3, чтобы C3 не вылетел за границы)
+    # 1. Поиск всех Bullish FVG
     for i in range(n - 2):
         c1 = df.iloc[i]       # C1 (самая старая)
         c2 = df.iloc[i + 1]   # C2 (импульсная)
@@ -26,50 +27,80 @@ def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, fvg_his
         is_gap = c1['high'] < c3['low']  # Бычий гэп
         
         if is_up and is_gap:
-            imb_level = c3['low']   # KL IMB
-            ff_level = c1['high']   # KL FF
-            
             fvg_item = {
                 "type": "BULLISH_FVG",
                 "c1_idx": i,
                 "c2_idx": i + 1,
                 "c3_idx": i + 2,
-                "imb_level": imb_level,
-                "ff_level": ff_level
+                "imb_level": c3['low'],   # KL IMB
+                "ff_level": c1['high']    # KL FF
             }
             fvgs.append(fvg_item)
-            print(f"[{symbol} {tf}] Bullish FVG found -> C3 idx: {i + 2} | IMB: {imb_level} | FF: {ff_level}")
 
-    # 2. Поиск Raid для каждого найденного Bullish FVG
+    if not fvgs:
+        return []
+
+    # 2. Поиск пробоев и выбор САМОГО СВЕЖЕГО (последнего) Raid
+    latest_bullish_raid = None
+
     for fvg in fvgs:
         c3_idx = fvg['c3_idx']
         imb_level = fvg['imb_level']
         ff_level = fvg['ff_level']
 
-        imb_broken = False
-        ff_broken = False
         imb_break_idx = None
         ff_break_idx = None
 
-        # Ищем пробой двигаясь вправо (в сторону актуального времени: от c3_idx + 1 до конца n-1)
+        # Диапазон поиска Raid: строго после C3 в сторону текущей цены (от c3_idx + 1 до конца n-1)
         start_search = c3_idx + 1
-        end_search = n  # не включая n (или ограничено fvg_history_limit)
+        end_search = n
 
         for idx in range(start_search, end_search):
             candle = df.iloc[idx]
             
             # Строгий пробой (касания игнорируем)
-            if not imb_broken and candle['low'] < imb_level:
-                imb_broken = True
+            if imb_break_idx is None and candle['low'] < imb_level:
                 imb_break_idx = idx
-            if not ff_broken and candle['low'] < ff_level:
-                ff_broken = True
+            if ff_break_idx is None and candle['low'] < ff_level:
                 ff_break_idx = idx
 
-        # Вывод результатов Raid в терминал
-        if imb_broken:
-            print(f"  [RAID] {symbol} {tf} Bullish IMB broken at {imb_level} (break_idx: {imb_break_idx}, C3 idx: {c3_idx})")
-        if ff_broken:
-            print(f"  [RAID] {symbol} {tf} Bullish FF broken at {ff_level} (break_idx: {ff_break_idx}, C3 idx: {c3_idx})")
+        # Приоритет у FF как у более глубокого уровня, либо фиксируем IMB
+        target_subtype = None
+        target_level = None
+        target_break_idx = None
 
-    return fvgs
+        if ff_break_idx is not None:
+            target_subtype = 'FF_bull'
+            target_level = ff_level
+            target_break_idx = ff_break_idx
+        elif imb_break_idx is not None:
+            target_subtype = 'IMB_bull'
+            target_level = imb_level
+            target_break_idx = imb_break_idx
+
+        # Если для этого FVG зафиксирован пробой, проверяем, является ли он самым свежим (наибольший break_idx)
+        if target_break_idx is not None:
+            raid_candidate = {
+                'symbol': symbol,
+                'tf': tf,
+                'type': 'BULLISH_FVG',
+                'subtype': target_subtype,
+                'level': target_level,
+                'break_idx': target_break_idx,
+                'c3_idx': c3_idx
+            }
+            
+            # Выбираем тот пробой, который ближе к настоящему (максимальный break_idx)
+            if latest_bullish_raid is None or raid_candidate['break_idx'] > latest_bullish_raid['break_idx']:
+                latest_bullish_raid = raid_candidate
+
+    # 3. Финальный вывод в консоль для Bullish
+    # Очищаем символ для красивого вывода (например, 'BTC/USDT' -> 'BTC')
+    clean_symbol = symbol.split('/')[0] if '/' in symbol else symbol.replace('USDT', '')
+    actual_raids = []
+    if latest_bullish_raid:
+        actual_raids.append(latest_bullish_raid)
+        r = latest_bullish_raid
+        print(f"🟢 {clean_symbol} {r['tf']} -> {r['subtype']} {r['level']} (Break: {r['break_idx']})")
+
+    return actual_raids
