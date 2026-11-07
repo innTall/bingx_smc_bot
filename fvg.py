@@ -14,7 +14,8 @@ def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, fvg_his
         return []
 
     # 1. Поиск всех Bullish FVG
-    for i in range(n - 2):
+    start_index = max(0, n - 3 - fvg_history_limit)
+    for i in range(start_index, n - 2):
         c1 = df.iloc[i]       # C1 (самая старая)
         c2 = df.iloc[i + 1]   # C2 (импульсная)
         c3 = df.iloc[i + 2]   # C3 (момент завершения FVG)

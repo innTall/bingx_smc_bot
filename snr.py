@@ -144,16 +144,14 @@ def analyze_snr_data(
     fractals: Optional[List[Fractal]] = None,
     snr_candles: int = 5,
     sl_max: float = 5.0,
-    last_candles_snr: int = 10,  # Новое ограничение по свечам для сформированного SNR
+    SNR_history: int = 10,
 ) -> SNRReport:
-    """Анализирует фракталы и собирает актуальные сформированные SNR в пределах окна last_candles_snr."""
+    """Анализирует фракталы и собирает сформированные SNR в окне SNR_history."""
     verified_fractals = (
         analyze_fractals_v3(df, symbol=symbol)
         if fractals is None
         else fractals
     )
-    last_candle_index = len(df) - 1
-    
     # Теперь будем собирать списки валидных сформированных уровней для FH и FL
     valid_fh_list: List[Dict[str, Any]] = []
     valid_fl_list: List[Dict[str, Any]] = []
@@ -176,9 +174,8 @@ def analyze_snr_data(
             if kl:
                 formed_snr = _find_formed_snr(df, kl, r_idx_int, fractal_type, snr_candles, sl_max)
                 if formed_snr:
-                    # Проверяем главное условие свежести: сформированный SNR должен быть 
-                    # в пределах последних last_candles_snr свечей от конца графика
-                    if formed_snr["candles_ago"] <= last_candles_snr:
+                    # Проверяем свежесть сформированного SNR относительно конца графика.
+                    if formed_snr["candles_ago"] <= SNR_history:
                         signal_data = {
                             "type": fractal_type,
                             "price": fractal["price"],

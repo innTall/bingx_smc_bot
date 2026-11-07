@@ -194,7 +194,7 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
     Форматирует отчет Trading Levels:
     - Группировка по символам.
     - Для каждого таймфрейма выводит актуальные сформированные SNR (и Long, и Short), 
-      попавшие в окно last_candles_snr.
+      попавшие в окно SNR_history.
     """
     lines = ["<b>Trading Levels Report</b>\n"]
     has_content = False

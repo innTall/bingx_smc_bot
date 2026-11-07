@@ -4,7 +4,6 @@ import aiohttp
 import logging
 import time
 import datetime
-import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Mapping, Coroutine
 
@@ -57,6 +56,9 @@ async def process_symbol(
                     df_candles,
                     symbol=formatted_symbol,
                     fractals=report_fractals,
+                    snr_candles=config.get('SNR_candles', 5),
+                    sl_max=config.get('SL_max', 5),
+                    SNR_history=config.get('SNR_history', 10),
                 )
 
                 # 3. Анализ Bullish FVG и их Raid (текущий шаг)
@@ -166,7 +168,7 @@ async def scheduler_loop():
             now = datetime.datetime.now()
             
             # Можете настроить минуту под себя для проверки
-            if now.minute == 46:
+            if now.minute == 44:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 
