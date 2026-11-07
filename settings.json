@@ -2,10 +2,11 @@
   "symbols": [
     "BTCUSDT",
     "ETHUSDT",
-    "SOLUSDT"
+    "SOLUSDT",
+    "XLMUSDT"
   ],
   "timeframes": ["1h", "4h", "1d"],
-  "limit": 100,
+  "limit": 25,
   "timezone_offset_hours": 3,
   "send_fractal_raid_report": false,
   "send_kl_snr_report": false,

@@ -20,22 +20,12 @@ def _get_candle_type(open_p: float, close_p: float) -> str:
 
 def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: str, 
     snr_candles: int = 5) -> Optional[Dict[str, Any]]:
-    """
-    Ищет KL SNR между индексом фрактала и индексом рейда, двигаясь от Raid влево (в прошлое).
-    Комбинация из 2-х свечей (пара i-1 и i):
-    - Для FH (Short): слева DOWN, справа UP.
-    - Для FL (Long): слева UP, справа DOWN.
-    Значение snr_candles включает в себя саму свечу Raid (правая свеча пары может быть на индексе raid_index).
-    """
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
 
-    # Ограничиваем левую границу поиска: либо фрактал, либо отступ на snr_candles влево от рейда
     max_lookback_index = raid_index - snr_candles
     start_left_limit = max(fractal_index, max_lookback_index)
 
-    # Двигаемся от raid_index влево до start_left_limit
-    # Проверяем пару: левая (i - 1), права (i)
     for i in range(raid_index, start_left_limit, -1):
         left_idx = i - 1
         right_idx = i
@@ -56,7 +46,7 @@ def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: 
             match_found = True
 
         if match_found:
-            level_price = l_close  # Приоритет Close при гэпе
+            level_price = l_close
             return {
                 "level_price": level_price,
                 "left_index": left_idx,
@@ -66,6 +56,7 @@ def _find_kl_snr(df: pd.DataFrame, fractal_index: int, raid_index: int, f_type: 
 
     return None
 
+
 def _find_formed_snr(
     df: pd.DataFrame, 
     kl_info: Dict[str, Any], 
@@ -74,13 +65,6 @@ def _find_formed_snr(
     snr_candles: int = 5,
     sl_max: float = 5.0
 ) -> Optional[Dict[str, Any]]:
-    """
-    Проверяет формирование SNR вправо от Raid в пределах snr_candles:
-    - Свеча (начиная с Raid candle) должна пробить KL SNR и закрыться (Close) за ним.
-    - Entry = цена KL SNR.
-    - StopLoss = экстремум (High/Low) между KL SNR и свечой пробоя.
-    - Проверяется условие риска: расстояние (Entry до SL) < sl_max (%).
-    """
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
     highs = df["high"].to_numpy()
@@ -89,7 +73,6 @@ def _find_formed_snr(
     kl_price = kl_info["level_price"]
     kl_right_idx = kl_info["right_index"]
     
-    # Двигаемся вправо от raid_index до raid_index + snr_candles (включая raid_index как возможную свечу формирования)
     end_idx = min(len(df), raid_index + snr_candles)
     
     formation_idx = None
@@ -98,18 +81,16 @@ def _find_formed_snr(
             break
         c = closes[i]
         
-        # Проверяем пробой и закрытие за уровнем
-        if f_type == "FH" and c < kl_price:  # Short: Close ниже уровня
+        if f_type == "FH" and c < kl_price:
             formation_idx = i
             break
-        elif f_type == "FL" and c > kl_price:  # Long: Close выше уровня
+        elif f_type == "FL" and c > kl_price:
             formation_idx = i
             break
             
     if formation_idx is None:
         return None
         
-    # Определяем StopLoss как экстремум в диапазоне от правого края KL SNR до свечи пробоя
     sub_highs = highs[kl_right_idx : formation_idx + 1]
     sub_lows = lows[kl_right_idx : formation_idx + 1]
     
@@ -122,11 +103,10 @@ def _find_formed_snr(
     if entry == 0:
         return None
         
-    # Расчет процента риска
     sl_percent = abs(entry - stop_loss) / entry * 100.0
     
     if sl_percent >= sl_max:
-        return None  # Стоп-лосс превышает допустимый риск (SL_max)
+        return None
         
     candles_ago = len(df) - 1 - formation_idx
     
@@ -138,6 +118,7 @@ def _find_formed_snr(
         "formation_index": formation_idx
     }
 
+
 def analyze_snr_data(
     df: pd.DataFrame,
     symbol: str = "UNKNOWN",
@@ -146,13 +127,11 @@ def analyze_snr_data(
     sl_max: float = 5.0,
     SNR_history: int = 10,
 ) -> SNRReport:
-    """Анализирует фракталы и собирает сформированные SNR в окне SNR_history."""
     verified_fractals = (
         analyze_fractals_v3(df, symbol=symbol)
         if fractals is None
         else fractals
     )
-    # Теперь будем собирать списки валидных сформированных уровней для FH и FL
     valid_fh_list: List[Dict[str, Any]] = []
     valid_fl_list: List[Dict[str, Any]] = []
 
@@ -174,7 +153,6 @@ def analyze_snr_data(
             if kl:
                 formed_snr = _find_formed_snr(df, kl, r_idx_int, fractal_type, snr_candles, sl_max)
                 if formed_snr:
-                    # Проверяем свежесть сформированного SNR относительно конца графика.
                     if formed_snr["candles_ago"] <= SNR_history:
                         signal_data = {
                             "type": fractal_type,
@@ -190,12 +168,49 @@ def analyze_snr_data(
                         else:
                             valid_fl_list.append(signal_data)
 
-    # Выбираем самый свежий (с минимальным candles_ago) для Long и для Short, если их несколько в окне
     best_fh = min(valid_fh_list, key=lambda x: x["candles_ago"]) if valid_fh_list else None
     best_fl = min(valid_fl_list, key=lambda x: x["candles_ago"]) if valid_fl_list else None
 
     return {
         "symbol": symbol,
-        "working_fh": best_fh,  #поддерживаем совместимость ключей
+        "working_fh": best_fh,
         "working_fl": best_fl,
     }
+
+
+def _find_fvg_kl_snr_long(df: pd.DataFrame, c2_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
+    """
+    ШАГ 1: Поиск KL SNR (Long) для Bullish FVG Raid.
+    """
+    opens = df["open"].to_numpy()
+    closes = df["close"].to_numpy()
+
+    left_bound = max(0, raid_index - snr_candles)
+    start_left_limit = max(c2_idx, left_bound)
+
+    if raid_index <= start_left_limit:
+        return None
+
+    for i in range(raid_index, start_left_limit, -1):
+        left_idx = i - 1
+        right_idx = i
+
+        if left_idx < 0 or right_idx >= len(df):
+            continue
+
+        l_open, l_close = opens[left_idx], closes[left_idx]
+        r_open, r_close = opens[right_idx], closes[right_idx]
+
+        l_type = "UP" if l_close > l_open else ("DOWN" if l_close < l_open else "FLAT")
+        r_type = "UP" if r_close > r_open else ("DOWN" if r_close < r_open else "FLAT")
+
+        if l_type == "UP" and r_type == "DOWN":
+            level_price = l_close
+            return {
+                "level_price": level_price,
+                "left_index": left_idx,
+                "right_index": right_idx,
+                "candles_ago_left": len(df) - 1 - left_idx,
+            }
+
+    return None

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Mapping, Coroutine
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
-from snr import analyze_snr_data
+from snr import analyze_snr_data, _find_fvg_kl_snr_long
 from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
 from fvg import detect_bullish_fvg_and_raids
 
@@ -61,13 +61,29 @@ async def process_symbol(
                     SNR_history=config.get('SNR_history', 10),
                 )
 
-                # 3. Анализ Bullish FVG и их Raid (текущий шаг)
+                # 3. Анализ Bullish FVG и их Raid
                 bullish_fvgs = detect_bullish_fvg_and_raids(
                     df=df_candles,
                     symbol=formatted_symbol,
                     tf=tf,
                     fvg_history_limit=fvg_history_limit
                 )
+                
+                # --- ШАГ 1: Поиск KL SNR для найденных бычьих FVG рейдов ---
+                for raid in bullish_fvgs:
+                    raid_idx = raid.get('break_idx')
+                    fvg_idx = raid.get('c3_idx')
+                    
+                    if raid_idx is not None and fvg_idx is not None:
+                        kl_result = _find_fvg_kl_snr_long(
+                            df=df_candles,
+                            c2_idx=int(fvg_idx),
+                            raid_index=int(raid_idx),
+                            snr_candles=config.get('SNR_candles', 10)
+                        )
+                        if kl_result:
+                            clean_sym = formatted_symbol.split('/')[0].replace('USDT', '')
+                            print(f"🟢 {clean_sym} {tf.upper()} KL SNR long {kl_result['level_price']} ({raid_idx})")
 
             except (KeyError, TypeError, ValueError, OverflowError):
                 logger.exception(
@@ -91,9 +107,6 @@ async def process_symbol(
 
 
 async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str, Any]) -> None:
-    """
-    Единый цикл анализа: опрос биржи, группировка по символам и отправка сводного отчета.
-    """
     symbols = config.get('symbols', ['BTCUSDT'])
     timeframes = config.get('timeframes', ['1h', '4h', '1d'])
     limit = config.get('limit', 25)
@@ -115,49 +128,38 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
     if config.get('send_fractal_raid_report', True):
         raid_report_text = format_fractal_raid_message(symbol_data_map)
         if raid_report_text:
-            success = await send_telegram_message(
+            await send_telegram_message(
                 session=session,
                 token=config['telegram_token'],
                 chat_id=config['telegram_chat_id'],
                 text=raid_report_text
             )
-            if success:
-                print("[INFO] Fractal Raid report sent successfully.")
-            else:
-                logger.error("Failed to send Fractal Raid report.")
 
     # --- БЛОК 2: KL SNR Report ---
     if config.get('send_kl_snr_report', True):
         snr_report_text = format_kl_snr_message(symbol_data_map)
         if snr_report_text:
-            success = await send_telegram_message(
+            await send_telegram_message(
                 session=session,
                 token=config['telegram_token'],
                 chat_id=config['telegram_chat_id'],
                 text=snr_report_text
             )
-            if success:
-                print("[INFO] KL SNR report sent successfully.")
-            else:
-                logger.error("Failed to send KL SNR report.")
 
     # --- БЛОК 3: Trading Levels Report ---
     if config.get('send_trading_levels_report', False):
         trading_levels_text = format_trading_levels_message(symbol_data_map)
         if trading_levels_text:
-            success = await send_telegram_message(
+            await send_telegram_message(
                 session=session,
                 token=config['telegram_token'],
                 chat_id=config['telegram_chat_id'],
                 text=trading_levels_text
             )
-            if success:
-                print("[INFO] Trading Levels report sent successfully.")
-            else:
-                logger.error("Failed to send Trading Levels report.")
 
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
+
 
 async def scheduler_loop():
     config = load_settings()
@@ -166,12 +168,9 @@ async def scheduler_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             now = datetime.datetime.now()
-            
-            # Можете настроить минуту под себя для проверки
-            if now.minute == 44:
+            if now.minute == 3:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
-                
                 print("[INFO] Waiting for the next hour...")
                 await asyncio.sleep(60)
             else:
