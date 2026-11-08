@@ -29,7 +29,7 @@ async def process_symbol(
     tasks = [fetch_bingx_ohlcv_async(session, formatted_symbol, tf, limit) for tf in timeframes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    fvg_history_limit = config.get('FVG_history', 25)
+    fvg_history_limit = config.get('limit', 25)
 
     for tf, df_candles in zip(timeframes, results):
         if isinstance(df_candles, BaseException):
@@ -55,7 +55,7 @@ async def process_symbol(
                     df=df_candles,
                     symbol=formatted_symbol,
                     tf=tf,
-                    fvg_history_limit=fvg_history_limit
+                    limit=fvg_history_limit
                 )
 
                 # Анализ Bearish FVG и их Raid
@@ -63,7 +63,7 @@ async def process_symbol(
                     df=df_candles,
                     symbol=formatted_symbol,
                     tf=tf,
-                    fvg_history_limit=fvg_history_limit
+                    limit=fvg_history_limit
                 )
 
                 # ТЕСТ ШАГ 1: Проверяем поиск ПОСЛЕДНЕГО KL SNR для Bearish FVG рейдов
@@ -89,6 +89,7 @@ async def process_symbol(
                     sl_max=config.get('SL_max', 5),
                     SNR_history=config.get('SNR_history', 10),
                     bullish_raids=bullish_fvgs,
+                    bearish_raids=bearish_fvgs,
                 )
 
             except (KeyError, TypeError, ValueError, OverflowError):
@@ -142,7 +143,7 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
             )
 
     # --- БЛОК 2: KL SNR Report ---
-    if config.get('send_kl_snr_report', True):
+    if config.get('send_kl_snr_report', False):
         snr_report_text = format_kl_snr_message(symbol_data_map)
         if snr_report_text:
             await send_telegram_message(
@@ -153,7 +154,7 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
             )
 
     # --- БЛОК 3: Trading Levels Report ---
-    if config.get('send_trading_levels_report', False):
+    if config.get('send_trading_levels_report', True):
         trading_levels_text = format_trading_levels_message(symbol_data_map)
         if trading_levels_text:
             await send_telegram_message(
@@ -173,7 +174,7 @@ async def scheduler_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             now = datetime.datetime.now()
-            if now.minute == 3:
+            if now.minute == 25:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 print("[INFO] Waiting for the next hour...")

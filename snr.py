@@ -42,7 +42,7 @@ def _calculate_sl_percent(entry: Any, stop_loss: Any, sl_max: float) -> Optional
         return None
 
     sl_percent = abs(entry_price - stop_loss_price) / entry_price * 100.0
-    if not np.isfinite(sl_percent) or sl_percent >= max_percent:
+    if not np.isfinite(sl_percent) or sl_percent > max_percent:  # Было >=, стало >
         return None
     return sl_percent
 
@@ -170,13 +170,15 @@ def analyze_snr_data(
     valid_fh_list: List[Dict[str, Any]] = []
     valid_fl_list: List[Dict[str, Any]] = []
     valid_fvg_snr_long_list: List[Dict[str, Any]] = []
+    valid_fvg_snr_short_list: List[Dict[str, Any]] = []
 
     if df.empty:
         return {
             "symbol": symbol,
             "working_fh": None,
             "working_fl": None,
-            "working_fvg_snr": None,
+            "working_fvg_snr_long": None,
+            "working_fvg_snr_short": None,
         }
 
     df_len = len(df)
@@ -220,11 +222,11 @@ def analyze_snr_data(
     best_fh = min(valid_fh_list, key=lambda x: x["candles_ago"]) if valid_fh_list else None
     best_fl = min(valid_fl_list, key=lambda x: x["candles_ago"]) if valid_fl_list else None
 
+    # Bullish FVG SNR (Long)
     if bullish_raids:
         for raid in bullish_raids:
             raid_idx = raid.get('break_idx')
-            fvg_idx = raid.get('c3_idx')
-            c1_idx = raid.get('c1_idx', fvg_idx - 2 if fvg_idx else None)
+            c1_idx = raid.get('c1_idx')
             
             r_idx_int = _safe_int_index(raid_idx, df_len)
             c1_idx_int = _safe_int_index(c1_idx, df_len)
@@ -243,21 +245,43 @@ def analyze_snr_data(
                             "formation_index": formed["formation_index"]
                         })
 
-    best_fvg_snr = min(valid_fvg_snr_long_list, key=lambda x: x["candles_ago"]) if valid_fvg_snr_long_list else None
+    best_fvg_snr_long = min(valid_fvg_snr_long_list, key=lambda x: x["candles_ago"]) if valid_fvg_snr_long_list else None
+
+    # Bearish FVG SNR (Short)
+    if bearish_raids:
+        for raid in bearish_raids:
+            raid_idx = raid.get('break_idx')
+            c1_idx = raid.get('c1_idx')
+            
+            r_idx_int = _safe_int_index(raid_idx, df_len)
+            c1_idx_int = _safe_int_index(c1_idx, df_len)
+            
+            if r_idx_int is not None and c1_idx_int is not None:
+                kl = _find_fvg_kl_snr_short(df, c1_idx_int, r_idx_int, snr_candles)
+                if kl:
+                    formed = _find_fvg_formed_snr_short(df, kl, r_idx_int, snr_candles, sl_max, SNR_history)
+                    if formed:
+                        valid_fvg_snr_short_list.append({
+                            "type": f"{raid.get('subtype', 'IMB')}_bear",
+                            "entry": formed["entry"],
+                            "stop_loss": formed["stop_loss"],
+                            "sl_percent": formed["sl_percent"],
+                            "candles_ago": formed["candles_ago"],
+                            "formation_index": formed["formation_index"]
+                        })
+
+    best_fvg_snr_short = min(valid_fvg_snr_short_list, key=lambda x: x["candles_ago"]) if valid_fvg_snr_short_list else None
 
     return {
         "symbol": symbol,
         "working_fh": best_fh,
         "working_fl": best_fl,
-        "working_fvg_snr": best_fvg_snr
+        "working_fvg_snr_long": best_fvg_snr_long,
+        "working_fvg_snr_short": best_fvg_snr_short
     }
 
 
 def _find_fvg_kl_snr_long(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
-    """
-    ШАГ 1: Поиск KL SNR (Long) для Bullish FVG Raid.
-    Захватывает свечи C1, C2, C3.
-    """
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
 
@@ -350,11 +374,6 @@ def _find_fvg_formed_snr_long(
 
 
 def _find_fvg_kl_snr_short(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
-    """
-    ШАГ 1: Поиск KL SNR (Short) для Bearish FVG Raid.
-    Зеркально FH: пара свечей (левая DOWN, правая UP).
-    Захватывает свечи C1, C2, C3.
-    """
     if _safe_int_index(c1_idx, len(df)) is None or _safe_int_index(raid_index, len(df)) is None:
         return None
 
@@ -383,7 +402,6 @@ def _find_fvg_kl_snr_short(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_c
         l_type = "UP" if l_close > l_open else ("DOWN" if l_close < l_open else "FLAT")
         r_type = "UP" if r_close > r_open else ("DOWN" if r_close < r_open else "FLAT")
 
-        # Для Short (зеркально FH): левая DOWN, правая UP
         if l_type == "DOWN" and r_type == "UP":
             level_price = l_close
             return {
@@ -394,3 +412,66 @@ def _find_fvg_kl_snr_short(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_c
             }
 
     return None
+
+
+def _find_fvg_formed_snr_short(
+    df: pd.DataFrame, 
+    kl_info: Dict[str, Any], 
+    raid_index: int, 
+    snr_candles: int = 5,
+    sl_max: float = 5.0,
+    SNR_history: int = 10
+) -> Optional[Dict[str, Any]]:
+    if _safe_int_index(raid_index, len(df)) is None:
+        return None
+
+    r_idx = int(raid_index)
+    closes = df["close"].to_numpy()
+    highs = df["high"].to_numpy()
+    
+    kl_price = kl_info["level_price"]
+    kl_right_idx = kl_info["right_index"]
+    
+    end_idx = min(len(df), r_idx + snr_candles)
+    
+    formation_idx = None
+    for i in range(r_idx, end_idx + 1):
+        if i >= len(df):
+            break
+        # Для шорта формирование происходит, когда цена закрытия падает ниже KL цены
+        if closes[i] < kl_price:
+            formation_idx = i
+            break
+            
+    if formation_idx is None:
+        return None
+        
+    sub_highs = highs[kl_right_idx : formation_idx + 1]
+    stop_loss = float(np.max(sub_highs))
+        
+    entry = kl_price
+    sl_percent = _calculate_sl_percent(entry, stop_loss, sl_max)
+    if sl_percent is None:
+        return None
+
+    # Проверка на инвалидацию: если цена поднялась выше stop_loss
+    is_invalidated = False
+    for idx in range(formation_idx + 1, len(df)):
+        if highs[idx] > stop_loss:
+            is_invalidated = True
+            break
+
+    if is_invalidated:
+        return None  
+
+    candles_ago = len(df) - 1 - formation_idx
+    if candles_ago > SNR_history:
+        return None
+
+    return {
+        "entry": entry,
+        "stop_loss": stop_loss,
+        "sl_percent": round(sl_percent, 1),
+        "candles_ago": candles_ago,
+        "formation_index": formation_idx
+    }

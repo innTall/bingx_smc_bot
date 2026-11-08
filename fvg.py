@@ -2,7 +2,7 @@
 from typing import List, Dict, Any
 import pandas as pd
 
-def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, fvg_history_limit: int = 25):
+def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, limit: int = 25):
     """
     Финальная версия для Bullish FVG:
     - Поиск FVG в oldest-first массиве.
@@ -20,7 +20,7 @@ def detect_bullish_fvg_and_raids(df: pd.DataFrame, symbol: str, tf: str, fvg_his
     lows = df["low"].to_numpy()
 
     # 1. Поиск всех Bullish FVG
-    start_index = max(0, n - 3 - fvg_history_limit)
+    start_index = max(0, n - limit)
     for i in range(start_index, n - 2):
         if (i + 2) >= n - 1:
             continue
@@ -100,7 +100,7 @@ def detect_bearish_fvg_and_raids(
     df: pd.DataFrame,
     symbol: str = "UNKNOWN",
     tf: str = "1h",
-    fvg_history_limit: int = 25
+    limit: int = 25
 ) -> List[Dict[str, Any]]:
     """
     Детектирует медвежьи FVG (Bearish Fair Value Gap) и их каскадные рейды (пробои снизу вверх).
@@ -119,7 +119,7 @@ def detect_bearish_fvg_and_raids(
     n = len(df)
     scan_limit = n - 1
 
-    start_idx = max(0, scan_limit - fvg_history_limit - 10)
+    start_idx = max(0, n - limit)
     
     for i in range(start_idx, scan_limit - 2):
         c1_idx = i

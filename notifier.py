@@ -213,7 +213,8 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
 
             fh = snr_data.get('working_fh')  # Здесь теперь хранится лучший Short в окне
             fl = snr_data.get('working_fl')  # Здесь теперь хранится лучший Long в окне
-            fvg_snr = snr_data.get('working_fvg_snr')
+            fvg_snr_long = snr_data.get('working_fvg_snr_long')
+            fvg_snr_short = snr_data.get('working_fvg_snr_short')
 
             tf_signals = []
 
@@ -231,15 +232,24 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
                     f"=> <b>{fl['entry']}</b>_SL <b>{fl['stop_loss']}</b> ({fl['sl_percent']}%)"
                 )
 
-            # Добавляем FVG SNR (IMB / FF), если есть
-            if fvg_snr:
-                # Определяем тип подписи (например, из 'IMB_bull' делаем 'IMB' или оставляем как нужно)
-                fvg_type_raw = fvg_snr.get('type', 'IMB_bull')
+            # Добавляем Bullish FVG SNR (Long), если есть
+            if fvg_snr_long:
+                fvg_type_raw = fvg_snr_long.get('type', 'IMB_bull')
                 fvg_label = 'IMB' if 'IMB' in fvg_type_raw else ('FF' if 'FF' in fvg_type_raw else fvg_type_raw)
                 
                 tf_signals.append(
                     f"  🟩 <b>{tf.lower()}</b>_{fvg_label}"
-                    f"=> <b>{fvg_snr['entry']}</b>_SL <b>{fvg_snr['stop_loss']}</b> ({fvg_snr['sl_percent']}%)"
+                    f"=> <b>{fvg_snr_long['entry']}</b>_SL <b>{fvg_snr_long['stop_loss']}</b> ({fvg_snr_long['sl_percent']}%)"
+                )
+
+            # Добавляем Bearish FVG SNR (Short), если есть
+            if fvg_snr_short:
+                fvg_type_raw_short = fvg_snr_short.get('type', 'IMB_bear')
+                fvg_label_short = 'IMB' if 'IMB' in fvg_type_raw_short else ('FF' if 'FF' in fvg_type_raw_short else fvg_type_raw_short)
+                
+                tf_signals.append(
+                    f"  🟥 <b>{tf.lower()}</b>_{fvg_label_short}"
+                    f"=> <b>{fvg_snr_short['entry']}</b>_SL <b>{fvg_snr_short['stop_loss']}</b> ({fvg_snr_short['sl_percent']}%)"
                 )
 
             if tf_signals:

@@ -56,6 +56,5 @@
   "send_trading_levels_report": true,
   "SNR_candles": 5,
   "SNR_history": 10,
-  "SL_max": 5,
-  "FVG_history": 10
+  "SL_max": 5
 }
