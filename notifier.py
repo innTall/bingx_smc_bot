@@ -265,3 +265,49 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
         return None
 
     return "\n".join(lines)
+
+def format_single_symbol_report(symbol: str, tf_map: Dict[str, Any]) -> Optional[str]:
+    """
+    Формирует компактный персональный отчет по конкретному символу со всеми таймфреймами.
+    """
+    clean_symbol = symbol.split('/')[0].replace('USDT', '')
+    timeframes = ['1h', '4h', '1d']
+    symbol_lines = []
+
+    for tf in timeframes:
+        tf_data = tf_map.get(tf)
+        if not tf_data:
+            continue
+        
+        snr_data = tf_data.get('snr')
+        if not snr_data:
+            continue
+
+        fh = snr_data.get('working_fh')
+        fl = snr_data.get('working_fl')
+        fvg_snr_long = snr_data.get('working_fvg_snr_long')
+        fvg_snr_short = snr_data.get('working_fvg_snr_short')
+
+        tf_signals = []
+
+        if fh:
+            tf_signals.append(f"  🔴 <b>{tf.lower()}</b>_FH => <b>{fh['entry']}</b>_SL <b>{fh['stop_loss']}</b> ({fh['sl_percent']}%)")
+        if fl:
+            tf_signals.append(f"  🟢 <b>{tf.lower()}</b>_FL => <b>{fl['entry']}</b>_SL <b>{fl['stop_loss']}</b> ({fl['sl_percent']}%)")
+        if fvg_snr_long:
+            fvg_type_raw = fvg_snr_long.get('type', 'IMB_bull')
+            fvg_label = 'IMB' if 'IMB' in fvg_type_raw else ('FF' if 'FF' in fvg_type_raw else fvg_type_raw)
+            tf_signals.append(f"  🟩 <b>{tf.lower()}</b>_{fvg_label} => <b>{fvg_snr_long['entry']}</b>_SL <b>{fvg_snr_long['stop_loss']}</b> ({fvg_snr_long['sl_percent']}%)")
+        if fvg_snr_short:
+            fvg_type_raw_short = fvg_snr_short.get('type', 'IMB_bear')
+            fvg_label_short = 'IMB' if 'IMB' in fvg_type_raw_short else ('FF' if 'FF' in fvg_type_raw_short else fvg_type_raw_short)
+            tf_signals.append(f"  🟥 <b>{tf.lower()}</b>_{fvg_label_short} => <b>{fvg_snr_short['entry']}</b>_SL <b>{fvg_snr_short['stop_loss']}</b> ({fvg_snr_short['sl_percent']}%)")
+
+        if tf_signals:
+            symbol_lines.extend(tf_signals)
+
+    if not symbol_lines:
+        return None
+
+    header = f"<b>{clean_symbol}</b>\n"
+    return header + "\n".join(symbol_lines)

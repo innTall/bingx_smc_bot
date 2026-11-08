@@ -11,7 +11,7 @@ from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
 from snr import analyze_snr_data, _find_fvg_kl_snr_short
-from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
+from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message, format_single_symbol_report
 from fvg import detect_bullish_fvg_and_raids, detect_bearish_fvg_and_raids
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
         sym: tf_map 
         for sym, tf_map in zip(symbols, symbol_data_list)
     }
-
+    '''
     # --- БЛОК 1: Fractal Raid Report ---
     if config.get('send_fractal_raid_report', True):
         raid_report_text = format_fractal_raid_message(symbol_data_map)
@@ -152,7 +152,7 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
                 chat_id=config['telegram_chat_id'],
                 text=snr_report_text
             )
-
+    
     # --- БЛОК 3: Trading Levels Report ---
     if config.get('send_trading_levels_report', True):
         trading_levels_text = format_trading_levels_message(symbol_data_map)
@@ -163,10 +163,60 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
                 chat_id=config['telegram_chat_id'],
                 text=trading_levels_text
             )
+    '''
+
+    # --- БЛОК: Безопасная отправка раздельных отчетов по символам через Producer-Consumer очередь ---
+    queue = asyncio.Queue()
+    
+    # Сначала собираем сообщения в очередь (Producer)
+    for symbol in sorted(symbol_data_map.keys()):
+        msg = format_single_symbol_report(symbol, symbol_data_map[symbol])
+        if msg:
+            await queue.put(msg)
+
+    total_signals = queue.qsize()
+    print(f"[INFO] Total symbol signals queued for Telegram: {total_signals}")
+
+    # Запускаем воркер (Consumer) с лимитом макс. 20 сообщений и паузой 3.5с
+    if total_signals > 0:
+        await telegram_worker(
+            session=session,
+            token=config['telegram_token'],
+            chat_id=config['telegram_chat_id'],
+            queue=queue,
+            max_messages=20
+        )
 
     elapsed = time.time() - start_time
     print(f"[INFO] Analysis cycle finished in {elapsed:.2f} seconds.")
 
+async def telegram_worker(session: aiohttp.ClientSession, token: str, chat_id: str, queue: asyncio.Queue, max_messages: int = 20):
+    """
+    Consumer: достает сообщения из очереди, отправляет с задержкой и ограничивает лимит до max_messages.
+    """
+    sent_count = 0
+    while not queue.empty():
+        if sent_count >= max_messages:
+            logger.warning("[WARNING] Reached max telegram messages limit (%d) for this cycle. Skipping remaining.", max_messages)
+            print(f"[INFO] Reached max telegram messages limit ({max_messages}).")
+            # Очищаем оставшееся в очереди
+            while not queue.empty():
+                queue.get_nowait()
+                queue.task_done()
+            break
+
+        message_text = await queue.get()
+        try:
+            await send_telegram_message(session=session, token=token, chat_id=chat_id, text=message_text)
+            sent_count += 1
+        except Exception as e:
+            logger.error("Failed to send queued message: %s", e)
+        finally:
+            queue.task_done()
+            
+        # Пауза между сообщениями (3.5 секунды) для защиты от лимитов Telegram
+        if not queue.empty():
+            await asyncio.sleep(3.5)
 
 async def scheduler_loop():
     print(f"[INFO] Scheduler started. Bot will run every hour.")
@@ -174,7 +224,7 @@ async def scheduler_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             now = datetime.datetime.now()
-            if now.minute == 25:
+            if now.minute == 10:
                 current_config = load_settings()
                 await run_analysis_cycle(session, current_config)
                 print("[INFO] Waiting for the next hour...")
