@@ -10,7 +10,7 @@ SNRReport = Dict[str, Any]
 
 
 def _safe_int_index(val: Any, length: int) -> Optional[int]:
-    """Безопасно преобразует значение в индекс с проверкой границ и типов (исключая None и bool)."""
+    """Безопасно преобразует значение в индекс с проверкой границ и типов."""
     if val is None or isinstance(val, bool):
         return None
     try:
@@ -160,6 +160,7 @@ def analyze_snr_data(
     sl_max: float = 5.0,
     SNR_history: int = 10,
     bullish_raids: Optional[List[Dict[str, Any]]] = None,
+    bearish_raids: Optional[List[Dict[str, Any]]] = None,
 ) -> SNRReport:
     verified_fractals = (
         analyze_fractals_v3(df, symbol=symbol)
@@ -223,12 +224,13 @@ def analyze_snr_data(
         for raid in bullish_raids:
             raid_idx = raid.get('break_idx')
             fvg_idx = raid.get('c3_idx')
+            c1_idx = raid.get('c1_idx', fvg_idx - 2 if fvg_idx else None)
             
             r_idx_int = _safe_int_index(raid_idx, df_len)
-            fvg_idx_int = _safe_int_index(fvg_idx, df_len)
+            c1_idx_int = _safe_int_index(c1_idx, df_len)
             
-            if r_idx_int is not None and fvg_idx_int is not None:
-                kl = _find_fvg_kl_snr_long(df, fvg_idx_int, r_idx_int, snr_candles)
+            if r_idx_int is not None and c1_idx_int is not None:
+                kl = _find_fvg_kl_snr_long(df, c1_idx_int, r_idx_int, snr_candles)
                 if kl:
                     formed = _find_fvg_formed_snr_long(df, kl, r_idx_int, snr_candles, sl_max, SNR_history)
                     if formed:
@@ -251,12 +253,16 @@ def analyze_snr_data(
     }
 
 
-def _find_fvg_kl_snr_long(df: pd.DataFrame, c2_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
+def _find_fvg_kl_snr_long(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
+    """
+    ШАГ 1: Поиск KL SNR (Long) для Bullish FVG Raid.
+    Захватывает свечи C1, C2, C3.
+    """
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
 
     left_bound = max(0, raid_index - snr_candles)
-    start_left_limit = max(c2_idx, left_bound)
+    start_left_limit = max(c1_idx, left_bound)
 
     if raid_index <= start_left_limit:
         return None
@@ -341,3 +347,50 @@ def _find_fvg_formed_snr_long(
         "candles_ago": candles_ago,
         "formation_index": formation_idx
     }
+
+
+def _find_fvg_kl_snr_short(df: pd.DataFrame, c1_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
+    """
+    ШАГ 1: Поиск KL SNR (Short) для Bearish FVG Raid.
+    Зеркально FH: пара свечей (левая DOWN, правая UP).
+    Захватывает свечи C1, C2, C3.
+    """
+    if _safe_int_index(c1_idx, len(df)) is None or _safe_int_index(raid_index, len(df)) is None:
+        return None
+
+    c1_int = int(c1_idx)
+    r_idx = int(raid_index)
+
+    opens = df["open"].to_numpy()
+    closes = df["close"].to_numpy()
+
+    left_bound = max(0, r_idx - snr_candles)
+    start_left_limit = max(c1_int, left_bound)
+
+    if r_idx <= start_left_limit:
+        return None
+
+    for i in range(r_idx, start_left_limit, -1):
+        left_idx = i - 1
+        right_idx = i
+
+        if left_idx < 0 or right_idx >= len(df):
+            continue
+
+        l_open, l_close = opens[left_idx], closes[left_idx]
+        r_open, r_close = opens[right_idx], closes[right_idx]
+
+        l_type = "UP" if l_close > l_open else ("DOWN" if l_close < l_open else "FLAT")
+        r_type = "UP" if r_close > r_open else ("DOWN" if r_close < r_open else "FLAT")
+
+        # Для Short (зеркально FH): левая DOWN, правая UP
+        if l_type == "DOWN" and r_type == "UP":
+            level_price = l_close
+            return {
+                "level_price": level_price,
+                "left_index": left_idx,
+                "right_index": right_idx,
+                "candles_ago_left": len(df) - 1 - left_idx,
+            }
+
+    return None

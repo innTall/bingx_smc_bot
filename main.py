@@ -10,9 +10,9 @@ from typing import Any, Dict, List, Mapping, Coroutine
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
-from snr import analyze_snr_data
+from snr import analyze_snr_data, _find_fvg_kl_snr_short
 from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
-from fvg import detect_bullish_fvg_and_raids
+from fvg import detect_bullish_fvg_and_raids, detect_bearish_fvg_and_raids
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,6 @@ async def process_symbol(
     tasks = [fetch_bingx_ohlcv_async(session, formatted_symbol, tf, limit) for tf in timeframes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Получаем fvg_history_limit из конфига (по умолчанию 25)
     fvg_history_limit = config.get('FVG_history', 25)
 
     for tf, df_candles in zip(timeframes, results):
@@ -59,7 +58,29 @@ async def process_symbol(
                     fvg_history_limit=fvg_history_limit
                 )
 
-                # 3. Анализ SNR (передаем bullish_fvgs)
+                # Анализ Bearish FVG и их Raid
+                bearish_fvgs = detect_bearish_fvg_and_raids(
+                    df=df_candles,
+                    symbol=formatted_symbol,
+                    tf=tf,
+                    fvg_history_limit=fvg_history_limit
+                )
+
+                # ТЕСТ ШАГ 1: Проверяем поиск ПОСЛЕДНЕГО KL SNR для Bearish FVG рейдов
+                if bearish_fvgs:
+                    latest_raid = bearish_fvgs[0]  # Берем единственный самый свежий рейд
+                    raid_idx = latest_raid.get('break_idx')
+                    c1_idx = latest_raid.get('c1_idx')
+                    
+                    if raid_idx is not None and c1_idx is not None:
+                        kl_short = _find_fvg_kl_snr_short(
+                            df=df_candles,
+                            c1_idx=int(c1_idx),
+                            raid_index=int(raid_idx),
+                            snr_candles=config.get('SNR_candles', 10)
+                        )
+                        
+                # 3. Анализ SNR
                 snr_report = analyze_snr_data(
                     df_candles,
                     symbol=formatted_symbol,
