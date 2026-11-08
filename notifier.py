@@ -1,9 +1,6 @@
 # notifier.py
 import aiohttp
-import logging
-from typing import List, Dict, Any, Optional
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Any, Optional
 
 async def send_telegram_message(session: aiohttp.ClientSession, token: str, chat_id: str, text: str) -> bool:
     if not token or token == "YOUR_BOT_TOKEN_HERE":
@@ -167,10 +164,10 @@ def format_kl_snr_message(symbol_data_map: Dict[str, Dict[str, Any]]) -> Optiona
             emoji = latest_raid['emoji']
             l_type = latest_raid['type']
 
-            if kl:
+            if kl and kl.get('level_price') is not None:
                 symbol_lines.append(
                     f"  {emoji} <b>{tf.upper()}</b> | {l_type} SNR: "
-                    f"<b>{kl['level_price']}</b> ({kl['candles_ago_left']})"
+                    f"<b>{kl['level_price']}</b> ({kl.get('candles_ago_left', '-')})"
                 )
             else:
                 # Если у самого свежего рейда нет KL SNR — ставим прочерк, никаких старых данных
@@ -216,6 +213,7 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
 
             fh = snr_data.get('working_fh')  # Здесь теперь хранится лучший Short в окне
             fl = snr_data.get('working_fl')  # Здесь теперь хранится лучший Long в окне
+            fvg_snr = snr_data.get('working_fvg_snr')
 
             tf_signals = []
 
@@ -231,6 +229,17 @@ def format_trading_levels_message(symbol_data_map: Dict[str, Dict[str, Any]]) ->
                 tf_signals.append(
                     f"  🟢 <b>{tf.lower()}</b>_FL"
                     f"=> <b>{fl['entry']}</b>_SL <b>{fl['stop_loss']}</b> ({fl['sl_percent']}%)"
+                )
+
+            # Добавляем FVG SNR (IMB / FF), если есть
+            if fvg_snr:
+                # Определяем тип подписи (например, из 'IMB_bull' делаем 'IMB' или оставляем как нужно)
+                fvg_type_raw = fvg_snr.get('type', 'IMB_bull')
+                fvg_label = 'IMB' if 'IMB' in fvg_type_raw else ('FF' if 'FF' in fvg_type_raw else fvg_type_raw)
+                
+                tf_signals.append(
+                    f"  🟩 <b>{tf.lower()}</b>_{fvg_label}"
+                    f"=> <b>{fvg_snr['entry']}</b>_SL <b>{fvg_snr['stop_loss']}</b> ({fvg_snr['sl_percent']}%)"
                 )
 
             if tf_signals:

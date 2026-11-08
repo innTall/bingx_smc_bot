@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Mapping, Coroutine
 from config import load_settings
 from exchange import fetch_bingx_ohlcv_async
 from fractals import analyze_fractals_v3, Fractal
-from snr import analyze_snr_data, _find_fvg_kl_snr_long
+from snr import analyze_snr_data
 from notifier import format_fractal_raid_message, send_telegram_message, format_kl_snr_message, format_trading_levels_message
 from fvg import detect_bullish_fvg_and_raids
 
@@ -50,8 +50,16 @@ async def process_symbol(
                     df_candles,
                     symbol=formatted_symbol,
                 )
-                
-                # 2. Анализ SNR
+
+                # 2. Анализ Bullish FVG и их Raid
+                bullish_fvgs = detect_bullish_fvg_and_raids(
+                    df=df_candles,
+                    symbol=formatted_symbol,
+                    tf=tf,
+                    fvg_history_limit=fvg_history_limit
+                )
+
+                # 3. Анализ SNR (передаем bullish_fvgs)
                 snr_report = analyze_snr_data(
                     df_candles,
                     symbol=formatted_symbol,
@@ -59,31 +67,8 @@ async def process_symbol(
                     snr_candles=config.get('SNR_candles', 5),
                     sl_max=config.get('SL_max', 5),
                     SNR_history=config.get('SNR_history', 10),
+                    bullish_raids=bullish_fvgs,
                 )
-
-                # 3. Анализ Bullish FVG и их Raid
-                bullish_fvgs = detect_bullish_fvg_and_raids(
-                    df=df_candles,
-                    symbol=formatted_symbol,
-                    tf=tf,
-                    fvg_history_limit=fvg_history_limit
-                )
-                
-                # --- ШАГ 1: Поиск KL SNR для найденных бычьих FVG рейдов ---
-                for raid in bullish_fvgs:
-                    raid_idx = raid.get('break_idx')
-                    fvg_idx = raid.get('c3_idx')
-                    
-                    if raid_idx is not None and fvg_idx is not None:
-                        kl_result = _find_fvg_kl_snr_long(
-                            df=df_candles,
-                            c2_idx=int(fvg_idx),
-                            raid_index=int(raid_idx),
-                            snr_candles=config.get('SNR_candles', 10)
-                        )
-                        if kl_result:
-                            clean_sym = formatted_symbol.split('/')[0].replace('USDT', '')
-                            print(f"🟢 {clean_sym} {tf.upper()} KL SNR long {kl_result['level_price']} ({raid_idx})")
 
             except (KeyError, TypeError, ValueError, OverflowError):
                 logger.exception(
@@ -162,7 +147,6 @@ async def run_analysis_cycle(session: aiohttp.ClientSession, config: Mapping[str
 
 
 async def scheduler_loop():
-    config = load_settings()
     print(f"[INFO] Scheduler started. Bot will run every hour.")
     
     async with aiohttp.ClientSession() as session:

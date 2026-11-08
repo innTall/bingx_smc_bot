@@ -6,8 +6,45 @@ import numpy as np
 
 from fractals import Fractal, analyze_fractals_v3
 
-SNRFractal = Dict[str, Any]
 SNRReport = Dict[str, Any]
+
+
+def _safe_int_index(val: Any, length: int) -> Optional[int]:
+    """Безопасно преобразует значение в индекс с проверкой границ и типов (исключая None и bool)."""
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        if isinstance(val, Integral):
+            i = int(val)
+            if 0 <= i < length:
+                return i
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _calculate_sl_percent(entry: Any, stop_loss: Any, sl_max: float) -> Optional[float]:
+    try:
+        entry_price = float(entry)
+        stop_loss_price = float(stop_loss)
+        max_percent = float(sl_max)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if (
+        not np.isfinite(entry_price)
+        or not np.isfinite(stop_loss_price)
+        or not np.isfinite(max_percent)
+        or entry_price <= 0
+        or stop_loss_price <= 0
+        or max_percent <= 0
+    ):
+        return None
+
+    sl_percent = abs(entry_price - stop_loss_price) / entry_price * 100.0
+    if not np.isfinite(sl_percent) or sl_percent >= max_percent:
+        return None
+    return sl_percent
 
 
 def _get_candle_type(open_p: float, close_p: float) -> str:
@@ -100,12 +137,8 @@ def _find_formed_snr(
         stop_loss = float(np.min(sub_lows))
         
     entry = kl_price
-    if entry == 0:
-        return None
-        
-    sl_percent = abs(entry - stop_loss) / entry * 100.0
-    
-    if sl_percent >= sl_max:
+    sl_percent = _calculate_sl_percent(entry, stop_loss, sl_max)
+    if sl_percent is None:
         return None
         
     candles_ago = len(df) - 1 - formation_idx
@@ -126,6 +159,7 @@ def analyze_snr_data(
     snr_candles: int = 5,
     sl_max: float = 5.0,
     SNR_history: int = 10,
+    bullish_raids: Optional[List[Dict[str, Any]]] = None,
 ) -> SNRReport:
     verified_fractals = (
         analyze_fractals_v3(df, symbol=symbol)
@@ -134,6 +168,17 @@ def analyze_snr_data(
     )
     valid_fh_list: List[Dict[str, Any]] = []
     valid_fl_list: List[Dict[str, Any]] = []
+    valid_fvg_snr_long_list: List[Dict[str, Any]] = []
+
+    if df.empty:
+        return {
+            "symbol": symbol,
+            "working_fh": None,
+            "working_fl": None,
+            "working_fvg_snr": None,
+        }
+
+    df_len = len(df)
 
     for fractal in verified_fractals:
         fractal_type = fractal.get("type")
@@ -141,13 +186,14 @@ def analyze_snr_data(
         if fractal.get("status") != "Working" or fractal_type not in ["FH", "FL"]:
             continue
         
-        if fractal_index is None:
+        fractal_index_int = _safe_int_index(fractal_index, df_len)
+        if fractal_index_int is None:
             continue
-        fractal_index_int = int(fractal_index)
+            
         raid_index = fractal.get("broken_at")
+        r_idx_int = _safe_int_index(raid_index, df_len)
 
-        if raid_index is not None:
-            r_idx_int = int(raid_index)
+        if r_idx_int is not None:
             kl = _find_kl_snr(df, fractal_index_int, r_idx_int, fractal_type, snr_candles)
 
             if kl:
@@ -157,6 +203,8 @@ def analyze_snr_data(
                         signal_data = {
                             "type": fractal_type,
                             "price": fractal["price"],
+                            "raid_candles_ago": df_len - 1 - r_idx_int,
+                            "kl_snr": kl,
                             "entry": formed_snr["entry"],
                             "stop_loss": formed_snr["stop_loss"],
                             "sl_percent": formed_snr["sl_percent"],
@@ -171,17 +219,39 @@ def analyze_snr_data(
     best_fh = min(valid_fh_list, key=lambda x: x["candles_ago"]) if valid_fh_list else None
     best_fl = min(valid_fl_list, key=lambda x: x["candles_ago"]) if valid_fl_list else None
 
+    if bullish_raids:
+        for raid in bullish_raids:
+            raid_idx = raid.get('break_idx')
+            fvg_idx = raid.get('c3_idx')
+            
+            r_idx_int = _safe_int_index(raid_idx, df_len)
+            fvg_idx_int = _safe_int_index(fvg_idx, df_len)
+            
+            if r_idx_int is not None and fvg_idx_int is not None:
+                kl = _find_fvg_kl_snr_long(df, fvg_idx_int, r_idx_int, snr_candles)
+                if kl:
+                    formed = _find_fvg_formed_snr_long(df, kl, r_idx_int, snr_candles, sl_max, SNR_history)
+                    if formed:
+                        valid_fvg_snr_long_list.append({
+                            "type": f"{raid.get('subtype', 'IMB')}_bull",
+                            "entry": formed["entry"],
+                            "stop_loss": formed["stop_loss"],
+                            "sl_percent": formed["sl_percent"],
+                            "candles_ago": formed["candles_ago"],
+                            "formation_index": formed["formation_index"]
+                        })
+
+    best_fvg_snr = min(valid_fvg_snr_long_list, key=lambda x: x["candles_ago"]) if valid_fvg_snr_long_list else None
+
     return {
         "symbol": symbol,
         "working_fh": best_fh,
         "working_fl": best_fl,
+        "working_fvg_snr": best_fvg_snr
     }
 
 
 def _find_fvg_kl_snr_long(df: pd.DataFrame, c2_idx: int, raid_index: int, snr_candles: int = 5) -> Optional[Dict[str, Any]]:
-    """
-    ШАГ 1: Поиск KL SNR (Long) для Bullish FVG Raid.
-    """
     opens = df["open"].to_numpy()
     closes = df["close"].to_numpy()
 
@@ -214,3 +284,60 @@ def _find_fvg_kl_snr_long(df: pd.DataFrame, c2_idx: int, raid_index: int, snr_ca
             }
 
     return None
+
+
+def _find_fvg_formed_snr_long(
+    df: pd.DataFrame, 
+    kl_info: Dict[str, Any], 
+    raid_index: int, 
+    snr_candles: int = 5,
+    sl_max: float = 5.0,
+    SNR_history: int = 10
+) -> Optional[Dict[str, Any]]:
+    closes = df["close"].to_numpy()
+    lows = df["low"].to_numpy()
+    
+    kl_price = kl_info["level_price"]
+    kl_right_idx = kl_info["right_index"]
+    
+    end_idx = min(len(df), raid_index + snr_candles)
+    
+    formation_idx = None
+    for i in range(raid_index, end_idx + 1):
+        if i >= len(df):
+            break
+        if closes[i] > kl_price:
+            formation_idx = i
+            break
+            
+    if formation_idx is None:
+        return None
+        
+    sub_lows = lows[kl_right_idx : formation_idx + 1]
+    stop_loss = float(np.min(sub_lows))
+        
+    entry = kl_price
+    sl_percent = _calculate_sl_percent(entry, stop_loss, sl_max)
+    if sl_percent is None:
+        return None
+
+    is_invalidated = False
+    for idx in range(formation_idx + 1, len(df)):
+        if lows[idx] < stop_loss:
+            is_invalidated = True
+            break
+
+    if is_invalidated:
+        return None  
+
+    candles_ago = len(df) - 1 - formation_idx
+    if candles_ago > SNR_history:
+        return None
+
+    return {
+        "entry": entry,
+        "stop_loss": stop_loss,
+        "sl_percent": round(sl_percent, 1),
+        "candles_ago": candles_ago,
+        "formation_index": formation_idx
+    }
